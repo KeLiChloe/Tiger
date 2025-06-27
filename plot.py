@@ -91,7 +91,7 @@ def plot_segmentation(pop, df=None, x_col='x_0', y_col='outcome', D_col='D_i', a
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f"{algo}_segmentation.png", dpi=300)
+    plt.savefig(f"figures/{algo}_segmentation.png", dpi=300)
 
 
 def plot_ground_truth(df, title="Outcome $Y_i$ vs. Covariate $x_i$", segment_col='true_segment_id', x_col='x_0', y_col='outcome', D_col='D_i'):
@@ -131,6 +131,6 @@ def plot_ground_truth(df, title="Outcome $Y_i$ vs. Covariate $x_i$", segment_col
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig("ground_truth_plot.png", dpi=300)
+    plt.savefig("figures/ground_truth_plot.png", dpi=300)
 
 

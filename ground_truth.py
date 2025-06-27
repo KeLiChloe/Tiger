@@ -31,9 +31,15 @@ class Customer:
         self.x = x
         self.D_i = D_i
         self.true_segment = true_segment
-        self.gmm_est_segment = None
-        self.policy_tree_est_segment = None
-        self.oast_est_segment = None
+        self.est_segment = {
+            "gmm": None,
+            "oast": None,
+            "policy_tree": None
+        }
+
+        # self.gmm_est_segment = None
+        # self.policy_tree_est_segment = None
+        # self.oast_est_segment = None
         self.y = true_segment.generate_outcome(x, D_i, noise_std)
         self.customer_id = customer_id
         
@@ -54,9 +60,14 @@ class PopulationSimulator:
         self.true_segments = self._init_true_segments()
         self.customers = self._generate_customers()
         
-        self.gmm_est_segments = None
-        self.policy_tree_est_segments = None
-        self.oast_est_segments = None  
+        self.est_segments_list = {
+            "gmm": [],
+            "policy_tree": [],
+            "oast": []
+        }
+        # self.gmm_est_segments = None
+        # self.policy_tree_est_segments = None
+        # self.oast_est_segments = None  
         
         
 
@@ -91,9 +102,9 @@ class PopulationSimulator:
             row = {
                 'customer_id': cust.customer_id,
                 'true_segment_id': cust.true_segment.segment_id,
-                'gmm_est_segment_id': cust.gmm_est_segment.segment_id if cust.gmm_est_segment else None,
-                'policy_tree_est_segment_id': cust.policy_tree_est_segment.segment_id if cust.policy_tree_est_segment else None,
-                'oast_est_segment_id': cust.oast_est_segment.segment_id if cust.oast_est_segment else None,
+                'gmm_est_segment_id': cust.est_segment['gmm'].segment_id if cust.est_segment['gmm'] else None,
+                'policy_tree_est_segment_id': cust.est_segment['policy_tree'].segment_id if cust.est_segment['policy_tree'] else None,
+                'oast_est_segment_id': cust.est_segment['oast'].segment_id if cust.est_segment['oast'] else None,
                 'D_i': cust.D_i,
                 'outcome': cust.y,
             }

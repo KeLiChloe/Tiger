@@ -12,7 +12,6 @@ import pandas as pd
 import plotly.graph_objects as go
 
 
-
 # Import R packages
 grf = importr('grf')
 policytree = importr('policytree')
@@ -22,6 +21,33 @@ grdevices = importr('grDevices')
 # Load R libraries
 ro.r('library(policytree)')
 ro.r('library(DiagrammeRsvg)')
+
+# Define R function to extract leaf-parent relationships
+ro.r('''
+    extract_leaf_parent_map <- function(tree) {
+    node_list <- as.list(tree)$nodes
+    leaf_to_parent <- list()
+
+    # Helper: walk by index (each node is stored by ID/index)
+    walk_tree <- function(node_id, parent_id = NA) {
+        node <- node_list[[node_id]]
+        if (is.null(node)) return(NULL)
+
+        if (!is.null(node$is_leaf) && node$is_leaf) {
+        leaf_to_parent[[as.character(node_id)]] <<- parent_id
+        } else {
+        walk_tree(node$left_child, node_id)
+        walk_tree(node$right_child, node_id)
+        }
+    }
+
+    walk_tree(1)  # Start from root node ID = 1
+    return(leaf_to_parent)
+    }
+    ''')
+
+
+
 
 def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, target_leaf_num: int):
     """
@@ -46,11 +72,25 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
     
     cforest = grf.causal_forest(X_r, Y_r, D_r)
     Gamma = policytree.double_robust_scores(cforest)
-    tree = policytree.policy_tree(X_r, Gamma, depth=depth)
-    
+    ro.globalenv['X'] = X_r
+    ro.globalenv['Gamma'] = Gamma
+
+    # Build the tree in R
+    ro.r(f'tree <- policy_tree(X, Gamma, depth={depth})')
+    tree_list = ro.r('as.list(tree)')
+
+
     # Plot the original policy tree 
-    # plot_policy_tree(tree, depth)
-    
+    plot_policy_tree(depth)
+
+    # Extract the map from R
+    leaf_to_parent_r = ro.r('extract_leaf_parent_map(tree)')
+    leaf_to_parent_map = {
+        int(k): int(leaf_to_parent_r.rx2(k)[0])
+        for k in leaf_to_parent_r.names
+    }
+
+    tree = ro.r('tree')  # fetch R tree into Python
     segment_r = policytree.predict_policy_tree(tree, X_r, type="node.id")
     action_r = policytree.predict_policy_tree(tree, X_r, type="action.id")
 
@@ -63,12 +103,20 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
     action_ids = normalize_action_ids(action_ids_raw)
     
     segment_labels_pruned, action_ids_pruned, _ = post_prune_tree(
-        segment_labels=segment_labels,
-        action_ids=action_ids,
+        segment_labels=np.array(segment_labels_raw),  # ✅ raw IDs
+        action_ids=np.array(action_ids),
         Gamma=np.array(Gamma),
-        target_leaf_num=target_leaf_num
-    )
+        target_leaf_num=target_leaf_num,
+        leaf_to_parent_map=leaf_to_parent_map
+)
     
+    # validate_sibling_merges(
+    #     pruned_segment_labels=segment_labels_pruned,
+    #     original_segment_labels=segment_labels_raw,  # <== use raw labels here!
+    #     leaf_to_parent_map=leaf_to_parent_map
+    # )
+
+
     # plot_segment_sankey(segment_labels, segment_labels_pruned)
 
     # Assign each customer to estimated segment
@@ -80,9 +128,8 @@ def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segme
     Returns:
         None, modifies pop.customers in-place
     """
-    pop.policy_tree_est_segments = []
     for seg_id in range(target_leaf_num):
-        pop.policy_tree_est_segments.append(None)  # placeholder for now
+        pop.est_segments_list["policy_tree"].append(None)  # placeholder for now
     estimate_per_segment(pop, target_leaf_num, segment_labels, x_mat, df, action_ids)
     assign_customers_to_segments(pop, segment_labels)
  
@@ -123,7 +170,7 @@ def estimate_per_segment(pop: PopulationSimulator, n_segments:int, segment_label
         est_action = action_ids[idx_m[0]]
         est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
         est_seg.count = len(idx_m)
-        pop.policy_tree_est_segments[m] = est_seg
+        pop.est_segments_list["policy_tree"][m] = est_seg
   
 def assign_customers_to_segments(pop: PopulationSimulator, segment_labels):
     """
@@ -138,7 +185,7 @@ def assign_customers_to_segments(pop: PopulationSimulator, segment_labels):
     """
     for i, cust in enumerate(pop.customers):
         m = segment_labels[i]
-        cust.policy_tree_est_segment = pop.policy_tree_est_segments[m]
+        cust.est_segment["policy_tree"] = pop.est_segments_list["policy_tree"][m]
    
 def normalize_segment_labels(segment_labels_raw):
     """
@@ -157,39 +204,32 @@ def normalize_action_ids(action_ids_raw):
     action_ids = np.array([a - 1 for a in action_ids_raw])
     return action_ids
 
-def post_prune_tree(segment_labels, action_ids, Gamma, target_leaf_num):
+def post_prune_tree(segment_labels, action_ids, Gamma, target_leaf_num, leaf_to_parent_map):
     """
-    Post-prune segments to reduce the number of leaves to `target_leaf_num`.
+    Prune only sibling leaf segments (same parent in tree structure).
 
     Parameters:
-        segment_labels (np.ndarray): Original segment labels (0-based)
-        action_ids (np.ndarray): Action IDs (0 = control, 1 = treatment)
-        Gamma (np.ndarray): N x 2 reward matrix
-        target_leaf_num (int): Desired number of segments after pruning
+        segment_labels: np.ndarray of segment IDs (raw R leaf IDs)
+        action_ids: np.ndarray of actions per sample
+        Gamma: np.ndarray (n x 2), reward matrix
+        target_leaf_num: desired number of leaf segments
+        leaf_to_parent_map: dict {leaf_id → parent_id}, from R
 
     Returns:
-        pruned_segment_labels (np.ndarray): New segment labels (0-based)
-        pruned_action_ids (np.ndarray): New action for each sample
-        segment_action_map (dict): Mapping from final segment to action
+        pruned_segment_labels, pruned_action_ids, segment_action_map
     """
-    # Step 1: Build initial mappings from segments
-    unique_segments = sorted(set(segment_labels))
+    # Build initial segment-to-sample index map
     segment_map = {
         s: np.array(np.where(segment_labels == s)[0], dtype=int)
-        for s in unique_segments
+        for s in sorted(set(segment_labels))
     }
-    action_map = {
-        s: action_ids[indices[0]]  # All actions in a segment are the same
-        for s, indices in segment_map.items()
-    }
+
+    # Track original leaf IDs in each segment
+    segment_to_leaves = {s: {s} for s in segment_map}
+    action_map = {s: action_ids[indices[0]] for s, indices in segment_map.items()}
 
     def seg_welfare(indices, action):
         return Gamma[indices, int(action)].mean()
-
-    if len(segment_map) < target_leaf_num:
-        raise ValueError(
-            f"Number of segments ({len(segment_map)}) is less than or equal to target ({target_leaf_num})."
-        )
 
     while len(segment_map) > target_leaf_num:
         best_pair = None
@@ -198,15 +238,22 @@ def post_prune_tree(segment_labels, action_ids, Gamma, target_leaf_num):
 
         segments = list(segment_map.keys())
         for s1, s2 in combinations(segments, 2):
+            # ✅ Only merge if all leaves have the same parent
+            combined_leaves = segment_to_leaves[s1] | segment_to_leaves[s2]
+            combined_parents = {leaf_to_parent_map[leaf] for leaf in combined_leaves}
+
+            if len(combined_parents) > 1:
+                continue  # Not siblings — illegal merge
+
+            # Evaluate welfare of merged segment
             idx1, idx2 = segment_map[s1], segment_map[s2]
             merged_idx = np.concatenate([idx1, idx2])
 
-            # Evaluate welfare for each possible action
             mean_rewards = [Gamma[merged_idx, a].mean() for a in range(Gamma.shape[1])]
             best_a = int(np.argmax(mean_rewards))
             merged_welfare = mean_rewards[best_a]
 
-            # Original weighted welfare
+            # Original welfare (weighted avg)
             w1 = seg_welfare(idx1, action_map[s1])
             w2 = seg_welfare(idx2, action_map[s2])
             n1, n2 = len(idx1), len(idx2)
@@ -218,17 +265,23 @@ def post_prune_tree(segment_labels, action_ids, Gamma, target_leaf_num):
                 best_action = best_a
                 min_welfare_loss = loss
 
-        # Merge best pair
+        if best_pair is None:
+            raise RuntimeError("No legal merges left — cannot reduce to target_leaf_num.")
+
         s1, s2 = best_pair
         new_seg_id = min(s1, s2)
         merged_indices = np.concatenate([segment_map[s1], segment_map[s2]])
 
         segment_map[new_seg_id] = merged_indices
         action_map[new_seg_id] = best_action
+        segment_to_leaves[new_seg_id] = segment_to_leaves[s1] | segment_to_leaves[s2]
+
+        # Remove the other (now merged) segment
         del segment_map[s1 if s1 != new_seg_id else s2]
         del action_map[s1 if s1 != new_seg_id else s2]
+        del segment_to_leaves[s1 if s1 != new_seg_id else s2]
 
-    # Reindex segment labels to 0-based
+    # Reindex to 0-based contiguous segments
     final_segments = sorted(segment_map.keys())
     seg_id_map = {old: new for new, old in enumerate(final_segments)}
 
@@ -270,11 +323,38 @@ def plot_segment_sankey(original, pruned):
     fig.update_layout(title_text="Segment Merge Flow (Original → Pruned)", font_size=12)
     fig.show()
 
-def plot_policy_tree(tree, depth):
-    svg_filename=f'policy_tree_depth_{depth}.svg'
-    ro.globalenv['tree'] = tree
+def plot_policy_tree(depth):
+    svg_filename=f'figures/policy_tree_depth_{depth}.svg'
     svg_string = ro.r('DiagrammeRsvg::export_svg(plot(tree))')[0]
     
     with open(svg_filename, "w") as f:
         f.write(svg_string)
     display(SVG(filename=svg_filename))
+    
+def validate_sibling_merges(pruned_segment_labels, original_segment_labels, leaf_to_parent_map):
+    """
+    Verifies that all samples within each final segment come from leaves with the same parent.
+
+    Parameters:
+        pruned_segment_labels: np.ndarray of final segment labels after pruning
+        original_segment_labels: np.ndarray of original leaf labels (pre-pruning)
+        leaf_to_parent_map: dict {leaf_id → parent_id} from R
+
+    Returns:
+        True if all merges are valid; raises AssertionError otherwise
+    """
+    import pandas as pd
+
+    df = pd.DataFrame({
+        'final_segment': pruned_segment_labels,
+        'original_leaf': original_segment_labels
+    })
+
+    for seg, group in df.groupby('final_segment'):
+        leaves = group['original_leaf'].unique()
+        parents = {leaf_to_parent_map[leaf] for leaf in leaves}
+        if len(parents) > 1:
+            raise AssertionError(f"Segment {seg} contains leaves with different parents: {parents}")
+    
+    print("✅ All final segments consist of sibling leaf merges only.")
+    return True

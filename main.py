@@ -24,12 +24,12 @@ N = N_segment * K
 results = []
 
 seed = np.random.randint(0, 1000)
-np.random.seed(381) # 381
+np.random.seed(417) # 381
 print(f"Random seed: {seed}")
 
 pop = PopulationSimulator(N, d, K, covariate_noise, param_range, noise_std)
 
-algo = "policy_tree"  # ["gmm", "policy_tree"]
+algo = "gmm"  # ["gmm", "policy_tree"]
 
 for M in [1,2,3,4,5,6,7]:
     if algo == "gmm":

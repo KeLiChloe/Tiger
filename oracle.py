@@ -75,10 +75,8 @@ def estimation_oracle(customers, algo):
 
         # True and estimated parameters
         true_seg = cust.true_segment
-        if algo == "gmm":
-            est_seg = cust.gmm_est_segment
-        elif algo == "policy_tree":
-            est_seg = cust.policy_tree_est_segment
+        est_seg = cust.est_segment.get(algo, None)
+        
 
         theta_true = np.concatenate(([true_seg.alpha], true_seg.beta, [true_seg.tau]))
         theta_est = np.concatenate(([est_seg.est_alpha], est_seg.est_beta, [est_seg.est_tau]))
@@ -122,10 +120,7 @@ def policy_oracle(customers, algo):
     for cust in customers:
         x_i = cust.x
         true_seg = cust.true_segment
-        if algo == "gmm":
-            est_seg = cust.gmm_est_segment
-        elif algo == "policy_tree":
-            est_seg = cust.policy_tree_est_segment
+        est_seg = cust.est_segment.get(algo, None)
 
         # True terms
         baseline = true_seg.alpha + true_seg.beta @ x_i

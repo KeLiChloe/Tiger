@@ -28,9 +28,8 @@ def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, random_s
     bic = gmm.bic(gmm_input)
 
     # Assign each customer to estimated segment
-    pop.gmm_est_segments = []
     for seg_id in range(n_segments):
-        pop.gmm_est_segments.append(None)  # placeholder for now
+        pop.est_segments_list["gmm"].append(None)  # placeholder for now
 
     # Estimate triplets via OLS per segment
     for m in range(n_segments):
@@ -56,12 +55,12 @@ def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, random_s
         # Create estimated segment object
         est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
         est_seg.count = len(idx_m)
-        pop.gmm_est_segments[m] = est_seg
+        pop.est_segments_list["gmm"][m] = est_seg
 
     # Link each customer to estimated segment
     for i, cust in enumerate(pop.customers):
         m = gmm_labels[i]
-        cust.gmm_est_segment = pop.gmm_est_segments[m]
+        cust.est_segment["gmm"] = pop.est_segments_list["gmm"][m]
     
     return gmm, bic
 
