@@ -7,81 +7,43 @@ from matplotlib.patches import Ellipse
 import numpy as np
 
 # optional parameters
-def plot_segmentation(pop, df=None, x_col='x_0', y_col='outcome', D_col='D_i', algo='gmm', gmm=None):
-    """
-    Visualize GMM segmentation in 2D (x_0, y) with:
-        - Colored customer points by segment
-        - Markers for D_i (o for control, x for treated)
-        - Soft-colored ellipses from GMM covariances
-        - Styled to match ground-truth plot
+import matplotlib.pyplot as plt
+import numpy as np
 
-    Parameters:
-    - pop: PopulationSimulator
-    - df: optional DataFrame (calls pop.to_dataframe() if None)
-    - x_col, y_col: plot axes
-    - D_col: treatment indicator
+def plot_segmentation(labels, df, x_col='x_0', y_col='outcome', D_col='D_i', algo='gmm', M=None):
     """
-    if df is None:
-        df = pop.to_dataframe()
-
-    # Data and metadata
+    Visualize segmentation in 2D (x, y) with:
+        - Colors by segment
+        - Markers by treatment group
+    """
+    # Data
     X_plot = df[[x_col, y_col]].values
-    # labels = np.array([cust.est_segment.segment_id if cust.est_segment else -1 for cust in pop.customers])
-    labels = df[f'{algo}_est_segment_id'].values
-    M = np.max(labels) + 1
-    colors = plt.cm.get_cmap("Set1", M)
+    unique_labels = np.unique(labels)
+    label_to_color_idx = {label: i for i, label in enumerate(unique_labels)}
+    cmap = plt.cm.get_cmap("Set1", len(unique_labels))
     markers = {0: 'o', 1: 'x'}
 
-    # Fix axis limits for consistency with ground-truth
+    # Axis limits
     x_min, x_max = X_plot[:, 0].min(), X_plot[:, 0].max()
     y_min, y_max = X_plot[:, 1].min(), X_plot[:, 1].max()
 
     plt.figure(figsize=(10, 6))
 
-    # Scatter: by segment + treatment
-    for m in range(M):
+    # Scatter plot
+    for label in unique_labels:
         for D in [0, 1]:
-            idx = (labels == m) & (df[D_col] == D)
+            idx = (labels == label) & (df[D_col] == D)
+            color = cmap(label_to_color_idx[label])
             plt.scatter(
                 X_plot[idx, 0],
                 X_plot[idx, 1],
-                color=colors(m),
+                color=color,
                 marker=markers[D],
                 alpha=0.7,
                 s=20,
-                label=f"Seg {m}, D={D}"
+                label=f"Seg {label}, D={D}"
             )
 
-    # Ellipses: soft Gaussian shading
-    if algo == "gmm":
-        if gmm is None:
-            raise ValueError("GMM object must be provided for GMM-based segmentation.")
-        for m in range(M):
-            mean = gmm.means_[m]
-
-            if gmm.covariance_type == 'full':
-                cov = gmm.covariances_[m]
-            elif gmm.covariance_type == 'tied':
-                cov = gmm.covariances_
-            elif gmm.covariance_type == 'diag':
-                cov = np.diag(gmm.covariances_[m])
-            elif gmm.covariance_type == 'spherical':
-                cov = np.eye(2) * gmm.covariances_[m]
-            else:
-                raise ValueError(f"Unsupported covariance type: {gmm.covariance_type}")
-
-            vals, vecs = np.linalg.eigh(cov)
-            order = np.argsort(vals)[::-1]
-            vals, vecs = vals[order], vecs[:, order]
-
-            angle = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
-            width, height = 2 * np.sqrt(vals)
-
-            ellipse = Ellipse(xy=mean, width=width, height=height, angle=angle,
-                            alpha=0.2, color=colors(m), zorder=0)
-            plt.gca().add_patch(ellipse)
-
-    # Final styling
     plt.xlabel(f"${x_col}$")
     plt.ylabel(f"${y_col}$")
     plt.title(f"{algo.upper()}-Based Segmentation")
@@ -91,10 +53,11 @@ def plot_segmentation(pop, df=None, x_col='x_0', y_col='outcome', D_col='D_i', a
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f"figures/{algo}_segmentation.png", dpi=300)
+    plt.savefig(f"figures/{algo}_segmentation_{M}.png", dpi=300)
 
 
-def plot_ground_truth(df, title="Outcome $Y_i$ vs. Covariate $x_i$", segment_col='true_segment_id', x_col='x_0', y_col='outcome', D_col='D_i'):
+
+def plot_ground_truth(df, title="Ground-Truth Segmentation", segment_col='true_segment_id', x_col='x_0', y_col='outcome', D_col='D_i'):
     """
     Plot outcome Y_i vs. covariate x_i in 1D simulation.
     
@@ -124,9 +87,9 @@ def plot_ground_truth(df, title="Outcome $Y_i$ vs. Covariate $x_i$", segment_col
                 label=f"Segment {k}, D={D_i}"
             )
 
-    plt.title(title)
-    plt.xlabel(f"${x_col}$")
-    plt.ylabel(f"${y_col}$")
+    plt.title(title, fontsize=20)
+    plt.xlabel(f"${x_col}$", fontsize=16)
+    plt.ylabel(f"${y_col}$", fontsize=16)
     plt.axhline(0, color='gray', linestyle='--', linewidth=0.5)
     plt.legend()
     plt.grid(True)

@@ -120,7 +120,7 @@ def policy_oracle(customers, algo):
     for cust in customers:
         x_i = cust.x
         true_seg = cust.true_segment
-        est_seg = cust.est_segment.get(algo, None)
+        est_seg = cust.est_segment.get(algo)
 
         # True terms
         baseline = true_seg.alpha + true_seg.beta @ x_i
@@ -138,8 +138,8 @@ def policy_oracle(customers, algo):
         manager_profit += manager_profit_i
 
     return {
-        "manager_profit": manager_profit / len(customers),
-        "oracle_profit": oracle_profit / len(customers),
+        "manager_profit": manager_profit,
+        "oracle_profit": oracle_profit,
         "regret": (oracle_profit - manager_profit), # / len(customers),
         "mistreatment_rate": mistreated # / len(customers)
     }
