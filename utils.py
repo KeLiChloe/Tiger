@@ -32,13 +32,9 @@ def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_label
 def estimate_segment_parameters(X, D, Y):
     """Fit OLS model Y ~ x + D and return parameters ."""
     if len(X) < X.shape[1] + 1:
-        # in this case, we will manually assign a random action
-        print("Warning: Not enough data to fit OLS. Assigning random action.")
-        
-        est_alpha, est_beta = 0, np.zeros(X.shape[1])
-        est_tau = np.random.choice([-1, 1])  # Randomly assign action
-        est_action = int(est_tau >= 0)
-        return est_alpha, est_beta, est_tau, est_action
+        # print("Warning: Not enough data to fit OLS.")
+            
+        return 404, np.ones(X.shape[1])*404, 404, 404
     
     X_design = build_design_matrix(X, D)
     
@@ -80,29 +76,10 @@ def plot_segment_sankey(original, pruned):
     fig.update_layout(title_text="Segment Merge Flow (Original → Pruned)", font_size=12)
     fig.show()
     
-    
-def print_dast_tree(node, feature_names=None, indent=""):
-    """
-    Recursively print the structure of an DAST tree.
 
-    Parameters:
-        node (DASTNode): The current node to print.
-        feature_names (list): Optional list of feature names for clarity.
-        indent (str): Current indentation (used in recursion).
-    """
-    if node.is_leaf:
-        print(f"{indent}Leaf [segment_id={node.segment_id}, n={len(node.indices)}] "
-              f"value={node.value:.4f}, tau_hat={node.tau_hat:.4f}")
-    else:
-        feat = (feature_names[node.split_feature]
-                if feature_names else f"x_{node.split_feature}")
-        print(f"{indent}Split: {feat} <= {node.split_threshold:.4f} "
-              f"(value={node.value:.4f}, tau_hat={node.tau_hat:.4f})")
-        print_dast_tree(node.left, feature_names, indent + "  ")
-        print_dast_tree(node.right, feature_names, indent + "  ")
 
 # estimated total profits of a segment after applying the learnt policy to the customers in that segment
-def compute_node_DR_value(Y, D, gamma, indices):
+def compute_node_DR_value(Y, D, gamma, indices, buff):
     D_m = D[indices]
     Y_m = Y[indices]
 
@@ -111,7 +88,7 @@ def compute_node_DR_value(Y, D, gamma, indices):
 
     # TODO: what is a reasonable return value here?
     if n1 == 0 or n0 == 0:
-        return 0, 0  #
+        return 0 
         # raise ValueError("The number of customers of an action is 0!")
 
     y1 = np.mean(Y_m[D_m == 1])
@@ -119,19 +96,21 @@ def compute_node_DR_value(Y, D, gamma, indices):
     tau_hat = y1 - y0
     a_i = int(tau_hat >= 0)
     
-    # Method 1: Direct + Gamma
-    # If D_m[i] = a_i, then we get profit Y_m[i]
-    # If D_m[i] != a_i, then we get profit gamma_a_i_m[i]
-    gamma_a_i_m = gamma[indices, a_i].reshape(-1, 1)
-    value = np.sum(Y_m[D_m == a_i]) + np.sum(gamma_a_i_m[D_m != a_i])
     
-    # Method 2: Gamma only
-    # gamma_0_m = gamma[indices, 0]
-    # gamma_1_m = gamma[indices, 1]
-    # V_i = (1 - a_i) * gamma_0_m + a_i * gamma_1_m
-    # value = np.sum(V_i)
+    if buff:
+        # Method 1: Direct + Gamma
+        # If D_m[i] = a_i, then we get profit Y_m[i]
+        # If D_m[i] != a_i, then we get profit gamma_a_i_m[i]
+        gamma_a_i_m = gamma[indices, a_i].reshape(-1, 1)
+        value = np.sum(Y_m[D_m == a_i]) + np.sum(gamma_a_i_m[D_m != a_i])
+    else:
+        # Method 2: Gamma only
+        gamma_0_m = gamma[indices, 0]
+        gamma_1_m = gamma[indices, 1]
+        V_i = (1 - a_i) * gamma_0_m + a_i * gamma_1_m
+        value = np.sum(V_i)
     
-    return value, tau_hat
+    return value
 
 
 def compute_residual_value(X, Y, D, indices):
@@ -139,10 +118,6 @@ def compute_residual_value(X, Y, D, indices):
     X_m = X[indices]
     D_m = D[indices].reshape(-1, 1)
     Y_m = Y[indices].reshape(-1, 1)
-    
-    y1 = np.mean(Y_m[D_m == 1])
-    y0 = np.mean(Y_m[D_m == 0])
-    tau_hat = y1 - y0
 
     # Construct the design matrix: [intercept | X | D]
     X_design = build_design_matrix(X_m, D_m)
@@ -156,7 +131,7 @@ def compute_residual_value(X, Y, D, indices):
     # Compute residuals
     residuals = np.sum((Y_m - Y_pred) ** 2)
 
-    return residuals, tau_hat
+    return residuals
 
 def evaluate_on_validation(pop: PopulationSimulator, algo):
     # the validation customers need to have already been assigned to estimated segments
@@ -169,10 +144,15 @@ def evaluate_on_validation(pop: PopulationSimulator, algo):
     V = 0
     for i, cust in enumerate(pop.val_customers):
         assigned_action = cust.est_segment[algo].est_action
-        if assigned_action == 404:
-            print("404 !!!!")
+        if assigned_action == 404 and algo != "mst" and algo != "policy_tree" and algo != "policy_tree-buff":
+            # print("404!!!!")
             assigned_action = cust.true_segment.action
             cust.est_segment[algo].est_action = cust.true_segment.action
+        else:
+            # randomly assign action
+            assigned_action = np.random.choice([0, 1])
+            cust.est_segment[algo].est_action = assigned_action
+        
         if int(assigned_action) == int(cust.D_i):
             V += cust.y
         else:
@@ -200,7 +180,7 @@ def assign_new_customers_to_segments(pop: PopulationSimulator, customers, model,
 
 
 def pick_M_for_algo(algo, df_results_M):
-    max_val = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", "dast", "mst", "kmeans-standard"]
+    max_val = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", "policy_tree-buff", "dast", "mst", "kmeans-standard"]
     min_val = ["gmm-standard", "clr-standard"]
     if algo in max_val:
         algo_picked_M = {

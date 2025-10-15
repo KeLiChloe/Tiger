@@ -58,7 +58,7 @@ def compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth):
         Gamma = ro.conversion.rpy2py(Gamma_r)
     return Gamma
 
-def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, target_leaf_num: int, x_mat, D_vec, y_vec):
+def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, target_leaf_num: int, x_mat, D_vec, y_vec, buff):
     """
     Perform policy tree-based segmentation and OLS-based estimation per segment.
 
@@ -73,8 +73,11 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
         y_r = ro.conversion.py2rpy(y_vec)
         D_r = ro.conversion.py2rpy(D_vec)
     
-    # Gamma = np.array(pop.gamma[[cust.customer_id for cust in pop.train_customers]])  # shape (N, 2)
-    Gamma = compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth)
+    if buff:
+        compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth) # just to build the tree in R env
+        Gamma = np.array(pop.gamma[[cust.customer_id for cust in pop.train_customers]])  # shape (N, 2)
+    else:
+        Gamma = compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth)
     
     # Extract tree structure
     leaf_to_parent_r = ro.r('extract_leaf_parent_map(tree)')
@@ -99,17 +102,19 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
         action_ids=np.array(action_ids),
         Gamma=Gamma,
         target_leaf_num=target_leaf_num,
-        leaf_to_parent_map=leaf_to_parent_map
+        leaf_to_parent_map=leaf_to_parent_map,
+        buff=buff
     )
 
     # Assign each train customer to estimated segment
-    estimate_segment_and_assign(pop, target_leaf_num, segment_labels_pruned, x_mat, D_vec, y_vec)
+    algo = "policy_tree" if not buff else "policy_tree-buff"
+    estimate_segment_and_assign(pop, target_leaf_num, segment_labels_pruned, x_mat, D_vec, y_vec, action_ids_pruned, algo)
 
     # assign validation customers to segments
     val_score = None
     if len(pop.val_customers) > 0:
-        assign_new_customers_to_pruned_tree(tree, pop, pop.val_customers, leaf_to_pruned_segment)
-        val_score = evaluate_on_validation(pop, algo="policy_tree")
+        assign_new_customers_to_pruned_tree(tree, pop, pop.val_customers, leaf_to_pruned_segment, algo)
+        val_score = evaluate_on_validation(pop, algo=f"{algo}")
     
     # plot_segment_sankey(segment_labels, segment_labels_pruned)
     
@@ -120,14 +125,14 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
 
 
 
-def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segment_labels, x_mat, D_vec, y_vec):
+def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segment_labels, x_mat, D_vec, y_vec, action_ids, algo):
     """
     Estimate parameters for each segment and assign customers to segments.
     Returns:
         None, modifies pop.customers in-place
     """
     # important to reset!!!
-    pop.est_segments_list["policy_tree"] = []  # Reset
+    pop.est_segments_list[f"{algo}"] = []  # Reset
     
     for m in range(target_leaf_num):
         idx_m = np.where(segment_labels == m)[0]
@@ -138,18 +143,19 @@ def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segme
         D_m = D_vec[idx_m]
         y_m = y_vec[idx_m]
 
-        est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m)
+        est_alpha, est_beta, est_tau, _ = estimate_segment_parameters(x_m, D_m, y_m)
         
-        # est_action = action_ids[idx_m[0]]
+        est_action = action_ids[idx_m[0]]
+        assert np.all(action_ids[idx_m] == action_ids[idx_m[0]]), "Inconsistent actions within segment"
         est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
-        pop.est_segments_list["policy_tree"].append(est_seg)
+        pop.est_segments_list[f"{algo}"].append(est_seg)
     
-    assign_trained_customers_to_segments(pop, segment_labels, "policy_tree")
+    assign_trained_customers_to_segments(pop, segment_labels, f"{algo}")
 
 import numpy as np
 from itertools import combinations
 
-def post_prune_tree(Y, D, segment_labels, action_ids, Gamma, target_leaf_num, leaf_to_parent_map):
+def post_prune_tree(Y, D, segment_labels, action_ids, Gamma, target_leaf_num, leaf_to_parent_map, buff):
     """
     Prune only sibling leaf segments (same parent in tree structure).
 
@@ -175,7 +181,10 @@ def post_prune_tree(Y, D, segment_labels, action_ids, Gamma, target_leaf_num, le
     segment_to_leaves = {s: {s} for s in segment_map}
     
     # Segment action: start from the action of (any) sample in the segment
-    # (If segments were pure leaves initially, this is fine.)
+    for _, idxs in segment_map.items():
+        assert np.all(action_ids[idxs] == action_ids[idxs[0]]), "Inconsistent actions within segment"
+
+    
     action_map = {s: int(action_ids[idxs[0]]) for s, idxs in segment_map.items()}
 
     while len(segment_map) > target_leaf_num:
@@ -197,14 +206,13 @@ def post_prune_tree(Y, D, segment_labels, action_ids, Gamma, target_leaf_num, le
             merged_idx = np.concatenate([idx1, idx2])
 
             # Choose the action that maximizes merged welfare
-            merged_node_value, merged_tau_hat = compute_node_DR_value(Y, D, Gamma, merged_idx)
-                
-            merged_node_action = int(merged_tau_hat >= 0) 
-            
+            merged_node_value  = compute_node_DR_value(Y, D, Gamma, merged_idx, buff)
+            merged_node_action = np.argmax(Gamma[merged_idx].mean(axis=0))
+
 
             # Original welfare = sum of each segment's welfare under its own action
-            w1 = compute_node_DR_value(Y, D, Gamma, idx1)[0]
-            w2 = compute_node_DR_value(Y, D, Gamma, idx2)[0]
+            w1 = compute_node_DR_value(Y, D, Gamma, idx1, buff)
+            w2 = compute_node_DR_value(Y, D, Gamma, idx2, buff)
             original_total = w1 + w2
 
             loss = original_total - merged_node_value
@@ -258,8 +266,6 @@ def post_prune_tree(Y, D, segment_labels, action_ids, Gamma, target_leaf_num, le
     return pruned_segment_labels, pruned_action_ids, leaf_to_pruned_segment
 
 
-
-
 def plot_policy_tree(depth):
     svg_filename=f'figures/policy_tree_depth_{depth}.svg'
     svg_string = ro.r('DiagrammeRsvg::export_svg(plot(tree))')[0]
@@ -268,7 +274,7 @@ def plot_policy_tree(depth):
         f.write(svg_string)
     display(SVG(filename=svg_filename))
     
-def assign_new_customers_to_pruned_tree(tree, pop, new_customers, leaf_to_pruned_segment):
+def assign_new_customers_to_pruned_tree(tree, pop, new_customers, leaf_to_pruned_segment, algo):
     """
     Assign each validation customer to a policy tree segment (based on pruned structure).
     """
@@ -284,9 +290,9 @@ def assign_new_customers_to_pruned_tree(tree, pop, new_customers, leaf_to_pruned
 
     for cust, raw_leaf in zip(new_customers, segment_ids):
         pruned_seg = leaf_to_pruned_segment[raw_leaf]  # maps raw leaf ID → pruned segment index
-        segment_obj = pop.est_segments_list["policy_tree"][pruned_seg]
+        segment_obj = pop.est_segments_list[f"{algo}"][pruned_seg]
 
         # assign segment to val customer
-        cust.est_segment["policy_tree"] = segment_obj
+        cust.est_segment[f"{algo}"] = segment_obj
 
 

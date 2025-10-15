@@ -124,7 +124,10 @@ def policy_oracle(customers, algo):
         oracle_profit_i = baseline + (true_seg.tau if oracle_action == 1 else 0)
 
         # Manager policy: treat if estimated tau > 0
-        manager_profit_i = baseline + (true_seg.tau if (est_seg.est_action == 1 or est_seg.est_action == 404) else 0)
+        if est_seg.est_action == 404:
+            manager_profit_i = oracle_profit_i
+        else:
+            manager_profit_i = baseline + (true_seg.tau if est_seg.est_action == 1 else 0)
 
         # Mistreatment if manager’s action ≠ oracle
         if est_seg.est_action != oracle_action and est_seg.est_action != 404:

@@ -63,7 +63,6 @@ class MSTree:
                 if gain > max_gain:
                     max_gain = gain
                     candidate_node = node
-            # print(f"Pruning node with gain {max_gain:.4f} to reduce from {len(current_leaves)} to {M} leaves.")
             if candidate_node:
                 candidate_node.prune()
             current_leaves = self._get_leaf_nodes()
@@ -101,7 +100,7 @@ class MSTree:
 
     def _grow_node(self, indices, depth):
         node = MSTNode(indices, depth)
-        node.value, node.tau_hat = compute_residual_value(self.x, self.y, self.D, indices)
+        node.value = compute_residual_value(self.x, self.y, self.D, indices)
 
         if depth == self.max_depth:
             self.leaf_nodes.append(node)
@@ -116,8 +115,8 @@ class MSTree:
                 right_idx = indices[self.x[indices, j] > t]
 
                 if self._check_leaf_constraints(left_idx) and self._check_leaf_constraints(right_idx):
-                    left_val, _ = compute_residual_value(self.x, self.y, self.D, left_idx)
-                    right_val, _ = compute_residual_value(self.x, self.y, self.D, right_idx)
+                    left_val = compute_residual_value(self.x, self.y, self.D, left_idx)
+                    right_val = compute_residual_value(self.x, self.y, self.D, right_idx)
                     gain = node.value - (left_val + right_val)
                     valid_splits.append((gain, j, t, left_idx, right_idx))
 
@@ -188,9 +187,9 @@ class MSTree:
         if left is None or right is None:
             return np.inf
         gain = (
-            compute_residual_value(self.x, self.y, self.D, node.indices)[0] -
-            (compute_residual_value(self.x, self.y, self.D, left.indices)[0] +
-            compute_residual_value(self.x, self.y, self.D, right.indices)[0])
+            compute_residual_value(self.x, self.y, self.D, node.indices) -
+            (compute_residual_value(self.x, self.y, self.D, left.indices) +
+            compute_residual_value(self.x, self.y, self.D, right.indices))
             
         )
         return gain
@@ -212,8 +211,10 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
         "X": np.array([cust.x for cust in pop.train_customers]),
         "D": np.array([cust.D_i for cust in pop.train_customers]).reshape(-1, 1),
         "Y": np.array([cust.y for cust in pop.train_customers]).reshape(-1, 1),
-        "Gamma": pop.gamma[[cust.customer_id for cust in pop.train_customers]]
+        # "Gamma": pop.gamma[[cust.customer_id for cust in pop.train_customers]]
+        "Gamma": pop._generate_gamma_matrix("reg")[[cust.customer_id for cust in pop.train_customers]],
     }
+    
     
     # candidate thresholds for each feature
     H = {

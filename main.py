@@ -21,20 +21,22 @@ multiprocessing.set_start_method('fork')
 param_range = {
     "alpha": (-10, 10),
     "beta": (-10, 10),
-    "tau": (-50, 50),
+    "tau": (-30, 30),
     "x_mean": (-20, 20)
 }
 
 
 plot = False
-compute_overlap = True
+compute_overlap = False
 
 N_segment_size = 100 # number of customers per segment
-d = 1 # dimensionality of covariates
-K = 5 # number of segments
+d =  10 # dimensionality of covariates
+partial_x = 0.4 # if >0, only first {partial_x}% of x is used in outcome generation
+K = 8 # number of segments
 M_range = list(range(max(2, K-3), K+4))
-covariate_noise = 4 # controls how similar x_i are within a segment
-noise_std = 4 # std of noise in outcome generation
+signal_covariate_noise = 4 # controls how similar x_i are within a segment
+disturb_covariate_noise = 6
+noise_std = 5 # std of noise in outcome generation
 
 kmeans_coef = 0.3
 clr_pair = False
@@ -44,17 +46,19 @@ N_total_implement_customers = N_total_pilot_customers
 
 DR_generation_method = "mlp" # "forest", "reg", or "mlp". For DAST only. Policytree uses "forest" by default. I suggest use "MLP".
 
-N_sims = 1 # Number of simulations to run
+N_sims = 200 # Number of simulations to run
 
 
-# algorithms =   ["gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da", "clr-standard", "clr-da", "dast", "mst", "policy_tree"]
-algorithms =   []
+# algorithms =   ["gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da", "kmeans-partial" "clr-standard", "clr-da", "dast", "mst", "policy_tree", "policy_tree-buff"]
+algorithms =   [ 'dast', 'kmeans-standard', 'gmm-standard', 'clr-standard', 'mst'] # , 'clr-standard', 'mst', 'dast'
 
 exp_result_dict = {
     "exp_params": {
         "K": K,
         "d": d,
-        "covariate_noise": covariate_noise,
+        "partial_x": partial_x,
+        "signal_covariate_noise": signal_covariate_noise,
+        "disturb_covariate_noise": disturb_covariate_noise,
         "noise_std": noise_std,
         "param_range": param_range,
         "N_segment_size": N_segment_size,
@@ -67,6 +71,7 @@ exp_result_dict = {
     
     **{algo: [] for algo in algorithms},
     "X_overlap_score": [],
+    "y_overlap_score": [],
     "X_y_overlap_score": [],
     "ambiguity_score": [],
 }
@@ -78,12 +83,13 @@ for _ in trange(N_sims):
     np.random.seed(seed)   # 5909, 67691
     print(f"Random seed: {seed}")
     
-    pop = PopulationSimulator(N_total_pilot_customers, N_total_implement_customers, d, K, covariate_noise, param_range, noise_std, DR_generation_method)
+    pop = PopulationSimulator(N_total_pilot_customers, N_total_implement_customers, d, K, signal_covariate_noise, disturb_covariate_noise, param_range, noise_std, DR_generation_method, partial_x)
     if compute_overlap:
         X_overlap_score = pop.compute_covariate_overlap()
+        y_overlap_score = pop.compute_outcome_overlap()
         X_y_overlap_score = pop.compute_joint_overlap()
         ambiguity_score = pop.compute_assignment_ambiguity()
-        print(f"X overlap score: {X_overlap_score:.4f}, (X, Y) overlap score: {X_y_overlap_score:.4f}, ambiguity score: {ambiguity_score:.4f}")
+        # print(f"X overlap score: {X_overlap_score:.4f}, (X, Y) overlap score: {X_y_overlap_score:.4f}, ambiguity score: {ambiguity_score:.4f}")
     
     # plot ground truth
     if plot:
@@ -147,8 +153,10 @@ for _ in trange(N_sims):
                     mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, threshold_grid=40)
                     
                 elif algo == "policy_tree":
-                    policy_tree_val_score, _, _ = policy_tree_segment_and_estimate(pop, depth_policy_tree, M, x_mat, D_vec, y_vec)
+                    policy_tree_val_score, _, _ = policy_tree_segment_and_estimate(pop, depth_policy_tree, M, x_mat, D_vec, y_vec, buff=False)
                 
+                elif algo == "policy_tree-buff":
+                    policy_tree_buff_val_score, _, _ = policy_tree_segment_and_estimate(pop, depth_policy_tree, M, x_mat, D_vec, y_vec, buff=True)
                 else:
                     raise ValueError(f"Unknown algorithm: {algo}")
                 
@@ -169,7 +177,8 @@ for _ in trange(N_sims):
                 results_M.append({
                     "M": M,
                     "dast_val": dast_val_score if algo == "dast" else None,
-                    "policytree_val": policy_tree_val_score if algo == "policy_tree" else None,
+                    "policy_tree_val": policy_tree_val_score if algo == "policy_tree" else None,
+                    "policy_tree-buff_val": policy_tree_buff_val_score if algo == "policy_tree-buff" else None,
                     "mst_val": mst_val_score if algo == "mst" else None,
                     "kmeans-standard_val": silhouette_score if algo == "kmeans-standard" else None,
                     "kmeans-da_val": DA_score_kmeans if algo == "kmeans-da" else None,
@@ -234,8 +243,12 @@ for _ in trange(N_sims):
             
             elif algo == "policy_tree":
                 depth_policy_tree = 1 if algo_picked_M <= 2 else (2 if algo_picked_M <=4 else (3 if algo_picked_M <= 8 else 4))
-                _, optimal_policy_tree, leaf_to_pruned_segment = policy_tree_segment_and_estimate(pop, depth_policy_tree, algo_picked_M, x_mat, D_vec, y_vec)
-                assign_new_customers_to_pruned_tree(optimal_policy_tree, pop, pop.implement_customers, leaf_to_pruned_segment)
+                _, optimal_policy_tree, leaf_to_pruned_segment = policy_tree_segment_and_estimate(pop, depth_policy_tree, algo_picked_M, x_mat, D_vec, y_vec, buff=False)
+                assign_new_customers_to_pruned_tree(optimal_policy_tree, pop, pop.implement_customers, leaf_to_pruned_segment, algo)
+            elif algo == "policy_tree-buff":
+                depth_policy_tree = 1 if algo_picked_M <= 2 else (2 if algo_picked_M <=4 else (3 if algo_picked_M <= 8 else 4))
+                _, optimal_policy_tree_buff, leaf_to_pruned_segment = policy_tree_segment_and_estimate(pop, depth_policy_tree, algo_picked_M, x_mat, D_vec, y_vec, buff=True)
+                assign_new_customers_to_pruned_tree(optimal_policy_tree_buff, pop, pop.implement_customers, leaf_to_pruned_segment, algo)
                 
             elif algo == "dast":
                 depth_dast = 1 if algo_picked_M <= 2 else (2 if algo_picked_M <=4 else (3 if algo_picked_M <= 8 else 4))
@@ -282,6 +295,7 @@ for _ in trange(N_sims):
     
     if compute_overlap:
         exp_result_dict['X_overlap_score'].append(X_overlap_score)
+        exp_result_dict['y_overlap_score'].append(y_overlap_score)
         exp_result_dict['X_y_overlap_score'].append(X_y_overlap_score)
         exp_result_dict['ambiguity_score'].append(ambiguity_score)
     
@@ -289,15 +303,16 @@ for _ in trange(N_sims):
     # print(f"Oracle profits: {oracle_profits_implementation['oracle_profit']:.2f}")
 
     # save the result after each simulation and print simulation number
-    # save_file = "exp/ablation/correct_exp_ablation_gmm_4.pkl"
-    # print(f"Completed {len(exp_result_dict['dast'])} / {N_sims} simulations.")
-    # with open(save_file, "wb") as f:
-    #     print(f"Saving results to {save_file}")
-    #     pickle.dump(exp_result_dict, f)
+    save_file = "exp/main/5.pkl"
+    print(f"Completed {len(exp_result_dict['dast'])} / {N_sims} simulations.")
+    with open(save_file, "wb") as f:
+        print(f"Saving results to {save_file}")
+        pickle.dump(exp_result_dict, f)
 
 
 # print mean value of overlap scores
 if compute_overlap:
     print(f"Average X overlap score: {np.mean(exp_result_dict['X_overlap_score']):.4f} ± {np.std(exp_result_dict['X_overlap_score']):.4f}")
+    print(f"Average Y overlap score: {np.mean(exp_result_dict['y_overlap_score']):.4f} ± {np.std(exp_result_dict['y_overlap_score']):.4f}")
     print(f"Average (X, Y) overlap score: {np.mean(exp_result_dict['X_y_overlap_score']):.4f} ± {np.std(exp_result_dict['X_y_overlap_score']):.4f}")
     print(f"Average ambiguity score: {np.mean(exp_result_dict['ambiguity_score']):.4f} ± {np.std(exp_result_dict['ambiguity_score']):.4f}")

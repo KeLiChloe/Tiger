@@ -102,7 +102,7 @@ class DASTree:
 
     def _grow_node(self, indices, depth):
         node = DASTNode(indices, depth)
-        node.value, node.tau_hat = compute_node_DR_value(self.y, self.D, self.gamma, indices)
+        node.value = compute_node_DR_value(self.y, self.D, self.gamma, indices, buff=True)
 
         if depth == self.max_depth:
             self.leaf_nodes.append(node)
@@ -117,8 +117,8 @@ class DASTree:
                 right_idx = indices[self.x[indices, j] > t]
 
                 if self._check_leaf_constraints(left_idx) and self._check_leaf_constraints(right_idx):
-                    left_val, _ = compute_node_DR_value(self.y, self.D, self.gamma, left_idx)
-                    right_val, _ = compute_node_DR_value(self.y, self.D, self.gamma, right_idx)
+                    left_val = compute_node_DR_value(self.y, self.D, self.gamma, left_idx, buff=True)
+                    right_val = compute_node_DR_value(self.y, self.D, self.gamma, right_idx, buff=True)
                     gain = left_val + right_val - node.value
                     valid_splits.append((gain, j, t, left_idx, right_idx))
 
@@ -139,10 +139,6 @@ class DASTree:
             else:
                 self.leaf_nodes.append(node)
                 return node
-        
-        # if best_gain <= self.epsilon or best_split is None: 
-        #     self.leaf_nodes.append(node) 
-        #     return node
 
         # Use best split
         node.is_leaf = False
@@ -189,9 +185,9 @@ class DASTree:
         if left is None or right is None:
             return np.inf
         gain = (
-            compute_node_DR_value(self.y, self.D, self.gamma, node.indices)[0] -
-            (compute_node_DR_value(self.y, self.D, self.gamma, left.indices)[0] +
-            compute_node_DR_value(self.y, self.D, self.gamma, right.indices)[0])
+            compute_node_DR_value(self.y, self.D, self.gamma, node.indices, buff=True) -
+            (compute_node_DR_value(self.y, self.D, self.gamma, left.indices, buff=True) +
+            compute_node_DR_value(self.y, self.D, self.gamma, right.indices, buff=True))
             
         )
         return gain

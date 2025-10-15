@@ -11,24 +11,38 @@ def print_params(data):
         dast_parameters = {
                 'K': data.get('K'),
                 'd': data.get('d'),
-                'covariate_noise': data.get('covariate_noise'),
+                'signal_covariate_noise': data.get('signal_covariate_noise'),
+                'disturb_covariate_noise': data.get('disturb_covariate_noise'),
                 'noise_std': data.get('noise_std'),
                 'tau_param_range': data.get('param_range').get('tau'),
                 'x_param_range': data.get('param_range').get('x_mean'),
+
+                
         }
     else:
         dast_parameters = {
             'K': data.get('exp_params').get('K'),
             'd': data.get('exp_params').get('d'),
-            'covariate_noise': data.get('exp_params').get('covariate_noise'),
+            'signal_covariate_noise': data.get('exp_params').get('signal_covariate_noise'),
+            'disturb_covariate_noise': data.get('exp_params').get('disturb_covariate_noise'),
             'noise_std': data.get('exp_params').get('noise_std'),
             'tau_param_range': data.get('exp_params').get('param_range').get('tau'),
             'x_param_range': data.get('exp_params').get('param_range').get('x_mean'),
     }
+        
+    # overlap_scores = {              # overlap
+    #             'X_overlap': np.mean(data.get('X_overlap_score')),
+    #             'Y_overlap': np.mean(data.get('y_overlap_score')),
+    #             'X_y_overlap': np.mean(data.get('X_y_overlap_score')),
+    #             'ambiguity_score': np.mean(data.get('ambiguity_score')),
+    # }
 
-    print("\n⚙️ Experiment Parameters for 'dast':\n")
+    print("=== Experiment Parameters ===")
     for key, value in dast_parameters.items():
         print(f"{key:>20}: {value}")
+    # print("\n=== Overlap Scores ===")
+    # for key, value in overlap_scores.items():
+    #     print(f"{key:>20}: {value:.4f}")
 
 def compute_improvement_ratio(data, comparators):
     improvement_ratios = {comp: [] for comp in comparators}
@@ -50,15 +64,16 @@ def filter_ratios(improvement_ratios, apply_remove_extreme, apply_sigma_clip):
         ratios_np = np.array(ratios)
 
         # --- Step 1: Remove 3 extreme values,  both min and max(OPTIONAL) ---
-        if apply_remove_extreme[comp]:
-            min_indices = np.argsort(ratios_np)[:1]
+        if apply_remove_extreme.get(comp, False):
+            min_indices = np.argsort(ratios_np)[:0]
             mask = np.ones_like(ratios_np, dtype=bool)
             mask[min_indices] = False
             ratios_np = ratios_np[mask]  
-            max_indices = np.argsort(ratios_np)[-1:]
-            mask = np.ones_like(ratios_np, dtype=bool)
-            mask[max_indices] = False
-            ratios_np = ratios_np[mask]
+            
+            # max_indices = np.argsort(ratios_np)[-1:]
+            # mask = np.ones_like(ratios_np, dtype=bool)
+            # mask[max_indices] = False
+            # ratios_np = ratios_np[mask]
 
         # --- Step 2: Remove values outside 3 sigma (OPTIONAL) ---
 
@@ -84,7 +99,7 @@ def plot(filtered_ratios):
     # Plot means as red dots
     for i, comp in enumerate(comparators):
         mean = np.mean(filtered_ratios[comp])
-        plt.scatter(i + 1, mean, color='red', marker='o', label=f'Improvemnet over {comp}: {mean:.2%}')
+        plt.scatter(i + 1, mean, color='red', label=f'DAST avg improvement ratio over {comp}: {mean:.2%}')
 
     # Unique legend
     handles, labels = plt.gca().get_legend_handles_labels()
@@ -93,13 +108,13 @@ def plot(filtered_ratios):
 
     plt.title("Relative Implementation Profit Improvement")
     plt.ylabel("Relative Improvement Ratio")
-    plt.ylim(-0.5, 1)
+    plt.ylim(-1, 1)
     plt.grid(True)
     plt.tight_layout()
     # plt.show()
 
 # === Load Data ===
-file_path = "exp/ablation/correct_exp_ablation_gmm_4.pkl"  # Make sure this is the correct path on your machine
+file_path = "exp/main/4.pkl"  # Make sure this is the correct path on your machine
 
 with open(file_path, "rb") as f:
     data = pickle.load(f)
@@ -107,12 +122,23 @@ with open(file_path, "rb") as f:
 save_ratio = False
 
 # comparators = [ "gmm", "mst", "kmeans", "policy_tree"]
-comparators = ["gmm-standard", "gmm-da"]
+# comparators = ["gmm-standard", "gmm-da"]
+# read file and extract comparators
+comparators = list(data.keys())
+comparators.remove('dast')
+comparators.remove('exp_params')
+comparators.remove('X_overlap_score')
+comparators.remove('y_overlap_score')
+comparators.remove('X_y_overlap_score')
+comparators.remove('ambiguity_score')
+print(f"Comparators found in data: {comparators}")
 
-apply_remove_extreme = {"gmm-standard": False, 
-                        "gmm-da": False,
-                        # "mst": False,
-                        # "policy_tree": False
+
+apply_remove_extreme = {
+                        "gmm-standard": True,  
+                        "kmeans-standard": True,
+                        "mst": True,
+                        "clr-standard": False
                         }
 apply_sigma_clip = False
 
@@ -120,6 +146,12 @@ print_params(data)
 
 if 'filtered_ratios' in data:
     filtered_ratios = data['filtered_ratios']
+    # print sorted filtered ratios
+    for comp in comparators:
+        print(f"{comp:>12}: ", end="")
+        sorted_ratios = np.sort(filtered_ratios[comp])
+        print(sorted_ratios)
+
 else:
     ratios = compute_improvement_ratio(data, comparators)
     filtered_ratios = filter_ratios(ratios, apply_remove_extreme, apply_sigma_clip)

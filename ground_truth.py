@@ -11,7 +11,7 @@ from rpy2.robjects.conversion import localconverter
 from scipy.spatial.distance import pdist
 
 
-ALGORITHMS = ["gmm-standard", "gmm-da", "dast", "policy_tree", "mst", "kmeans-standard", "kmeans-da", "clr-standard", "clr-da"]
+ALGORITHMS = ["gmm-standard", "gmm-da", "dast", "policy_tree", "policy_tree-buff", "mst", "kmeans-standard", "kmeans-da", "clr-standard", "clr-da"]
 
 grf = importr('grf')
 policytree = importr('policytree')
@@ -24,11 +24,11 @@ class SegmentTrue:
         self.tau = tau
         self.x_mean = x_mean
         self.segment_id = segment_id
-        self.action = int(tau>0)
+        self.action = int(tau>=0)
 
-    def generate_outcome(self, x, D_i, noise_std):
+    def generate_outcome(self, x, D_i, noise_std, signal_d):
         noise = np.random.normal(0, noise_std)
-        return self.alpha + self.beta @ x + self.tau * D_i + noise
+        return self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau * D_i + noise
         
 
         
@@ -42,21 +42,21 @@ class SegmentEstimate:
 
 
 class Customer_pilot:
-    def __init__(self, x, D_i, y, true_segment: SegmentTrue, customer_id=None):
+    def __init__(self, x, D_i, y, true_segment: SegmentTrue,  customer_id=None):
         self.x = x
         self.D_i = D_i
         self.true_segment = true_segment
         self.y = y
         self.est_segment = {algo: None for algo in ALGORITHMS}
 
-        
         self.customer_id = customer_id
 
 class Customer_implement:
-    def __init__(self, x, true_segment: SegmentTrue, noise_std):
+    def __init__(self, x, true_segment: SegmentTrue, noise_std, signal_d):
         self.x = x
         self.true_segment = true_segment
         self.noise_std = noise_std
+        self.signal_d = signal_d
         
         self.est_segment = {algo: None for algo in ALGORITHMS}
         
@@ -64,10 +64,15 @@ class Customer_implement:
         # evaluate the profit for a single customer under algo
         if self.est_segment[algo].est_action != 404:
             self.implement_action = self.est_segment[algo].est_action 
-        else: # 404 case : only one treatment
-            self.implement_action = self.true_segment.action
         
-        self.y = self.true_segment.generate_outcome(self.x, self.implement_action, self.noise_std)
+        else: # 404 case for tree based algorithms
+            if algo in ["policy_tree", "policy_tree-buff", "mst", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
+                self.implement_action = 1-self.true_segment.action
+            else:
+                # print("404",algo)
+                self.implement_action = self.true_segment.action
+        
+        self.y = self.true_segment.generate_outcome(self.x, self.implement_action, self.noise_std, self.signal_d)
         return self.y
         
 # ----------------------------------------
@@ -75,15 +80,18 @@ class Customer_implement:
 # ----------------------------------------
 
 class PopulationSimulator:
-    def __init__(self, N_total_pilot_customers, N_total_implement_customers, d, K, covariate_noise, param_range, noise_std, DR_generation_method):
+    def __init__(self, N_total_pilot_customers, N_total_implement_customers, d, K, signal_covariate_noise, disturb_covariate_noise, param_range, noise_std, DR_generation_method, partial_x):
         self.N_total_pilot_customers = N_total_pilot_customers
         self.N_total_implement_customers = N_total_implement_customers
         self.d = d
         self.K = K
         
         self.param_range = param_range
-        self.noise_std = noise_std
-        self.covariate_noise = covariate_noise  # Controls how similar x_i are within a segment
+        self.noise_std = noise_std # Controls the noise in outcome generation
+        self.signal_covariate_noise = signal_covariate_noise  
+        self.disturb_covariate_noise = disturb_covariate_noise
+        self.signal_d = d if partial_x == 0 else max(1, int(d * partial_x))  # number of features used in outcome generation
+        self.disturb_d = d - self.signal_d  # number of features NOT used in outcome generation
 
         self.true_segments = self._init_true_segments()
         self.pilot_customers = self._generate_pilot_customers()
@@ -103,7 +111,7 @@ class PopulationSimulator:
             alpha = np.random.uniform(*pr["alpha"])
             beta = np.random.uniform(*pr["beta"], size=self.d)
             tau = np.random.uniform(*pr["tau"])
-            x_mean = np.random.uniform(*pr["x_mean"], size=self.d)
+            x_mean = np.random.uniform(*pr["x_mean"], size=self.signal_d)
             true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean))
         
         return true_segments
@@ -127,29 +135,78 @@ class PopulationSimulator:
         #     if np.min(pdist(beta_check, metric="euclidean")) > 3 and not np.all(tau_check > 0) and not np.all(tau_check < 0):
         #         return true_segments
 
-
+        
     def _generate_pilot_customers(self):
         pilot_customers = []
-        cov = np.eye(self.d) * (self.covariate_noise ** 2)
+
+        cov_signal = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
+        cov_noise = np.eye(self.disturb_d) * (self.disturb_covariate_noise ** 2)
+
+        # 噪声的“总体”分布（所有簇共享）
+        global_noise_mean = np.random.uniform(*self.param_range["x_mean"], size=self.disturb_d)
+
         for i in range(self.N_total_pilot_customers):
+            # 1️⃣ 选真实 segment
             segment = np.random.choice(self.true_segments)
-            x = np.random.multivariate_normal(mean=segment.x_mean, cov=cov)
+
+            # 2️⃣ signal 部分：根据 segment 的 mean 生成
+            x_signal = np.random.multivariate_normal(mean=segment.x_mean, cov=cov_signal)
+
+            # 3️⃣ noise 部分：
+            #    所有簇共用一个大体分布，但加一点点簇内扰动
+            small_shift = np.random.normal(0, 1, size=self.disturb_d)  # 轻微簇差异
+            x_noise = np.random.multivariate_normal(mean=global_noise_mean + small_shift,
+                                                    cov=cov_noise)
+
+            # 4️⃣ 拼接 signal + noise
+            x_full = np.concatenate([x_signal, x_noise])
+
+            # 5️⃣ outcome
             D_i = np.random.binomial(1, 0.5)
-            y = segment.generate_outcome(x, D_i, self.noise_std)
-            cust = Customer_pilot(x, D_i, y, segment, customer_id=i)
+            y = segment.generate_outcome(x_full, D_i, self.noise_std, self.signal_d)
+
+            # 6️⃣ 保存
+            cust = Customer_pilot(x_full, D_i, y, segment, customer_id=i)
             pilot_customers.append(cust)
+
         return pilot_customers
+
+
     
+        
     def _generate_implement_customers(self):
         implement_customers = []
-        cov = np.eye(self.d) * (self.covariate_noise ** 2)
-        for _ in range(self.N_total_implement_customers):
+
+        # --- 信号和噪声协方差 ---
+        cov_signal = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
+        cov_noise = np.eye(self.disturb_d) * (self.disturb_covariate_noise ** 2)
+
+        # --- 噪声的“总体”分布（所有簇共享） ---
+        global_noise_mean = np.random.uniform(*self.param_range["x_mean"], size=self.disturb_d)
+
+        for i in range(self.N_total_implement_customers):
+            # 1️⃣ 选真实 segment
             segment = np.random.choice(self.true_segments)
-            x = np.random.multivariate_normal(mean=segment.x_mean, cov=cov)
-            cust = Customer_implement(x, segment, self.noise_std)
+
+            # 2️⃣ signal 部分（每个簇自己的均值）
+            x_signal = np.random.multivariate_normal(mean=segment.x_mean, cov=cov_signal)
+
+            # 3️⃣ noise 部分（几乎相同的分布 + 轻微漂移）
+            small_shift = np.random.normal(0, 2, size=self.disturb_d)
+            x_noise = np.random.multivariate_normal(mean=global_noise_mean + small_shift,
+                                                    cov=cov_noise)
+
+            # 4️⃣ 拼接信号 + 噪声
+            x_full = np.concatenate([x_signal, x_noise])
+
+            # 5️⃣ 建立 customer 对象
+            cust = Customer_implement(x_full, segment, self.noise_std, self.signal_d)
             implement_customers.append(cust)
+
         return implement_customers
-    
+
+
+
     # ---------- NEW: overlap function ----------
     def compute_covariate_overlap(self):
         """Compute average Bhattacharyya coefficient of X distributions across true segments."""
@@ -168,7 +225,40 @@ class PopulationSimulator:
                 bc = float(np.clip(bc, 0.0, 1.0))              # enforce [0,1]
                 bcs.append(bc)
 
-        return 2 * np.mean(bcs) if bcs else 1.0
+        return np.mean(bcs) if bcs else 1.0
+
+    def compute_outcome_overlap(self):
+        """Compute average Bhattacharyya coefficient of Y distributions across true segments."""
+        Sigma = np.eye(self.d) * (self.covariate_noise ** 2)
+        sigma = self.noise_std
+        K = self.K
+
+        def y_params(seg, D):
+            mu = seg.x_mean
+            beta = seg.beta
+            alpha = seg.alpha
+            tau = seg.tau
+            m_y = alpha + beta @ mu + tau * D
+            v_y = beta @ Sigma @ beta + sigma**2
+            return m_y, v_y
+
+        def bc_univariate(m1, v1, m2, v2):
+            term1 = 0.25 * np.log(0.25 * ((v1/v2) + (v2/v1) + 2))
+            term2 = 0.25 * ((m1 - m2)**2) / (v1 + v2)
+            BD = term1 + term2
+            BC = float(np.exp(-BD))
+            return float(np.clip(BC, 0.0, 1.0))  # ensure in [0,1]
+
+        bcs = []
+        for k in range(K):
+            for l in range(k+1, K):
+                bc_Ds = []
+                for D in (0, 1):
+                    m1, v1 = y_params(self.true_segments[k], D)
+                    m2, v2 = y_params(self.true_segments[l], D)
+                    bc_Ds.append(bc_univariate(m1, v1, m2, v2))
+                bcs.append(0.5 * sum(bc_Ds))  # average over D
+        return np.mean(bcs) if bcs else 1.0
 
 
     def compute_joint_overlap(self):
@@ -209,7 +299,7 @@ class PopulationSimulator:
                     m2, S2 = mean_cov_for(self.true_segments[l], D)
                     bc_Ds.append(bhattacharyya_gaussian(m1, S1, m2, S2))
                 bcs.append(0.5 * sum(bc_Ds))  # average over D
-        return 2 * np.mean(bcs) if bcs else 1.0
+        return np.mean(bcs) if bcs else 1.0
     
 
     def compute_assignment_ambiguity(self):
