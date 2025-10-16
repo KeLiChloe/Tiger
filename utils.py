@@ -131,7 +131,8 @@ def compute_residual_value(X, Y, D, indices):
     # Compute residuals
     residuals = np.sum((Y_m - Y_pred) ** 2)
 
-    return residuals
+    return residuals/len(indices)
+    # return residuals
 
 def evaluate_on_validation(pop: PopulationSimulator, algo):
     # the validation customers need to have already been assigned to estimated segments

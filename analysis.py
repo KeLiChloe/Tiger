@@ -135,9 +135,9 @@ print(f"Comparators found in data: {comparators}")
 
 
 apply_remove_extreme = {
-                        "gmm-standard": True,  
-                        "kmeans-standard": True,
-                        "mst": True,
+                        "gmm-standard": False,  
+                        "kmeans-standard": False,
+                        "mst": False,
                         "clr-standard": False
                         }
 apply_sigma_clip = False

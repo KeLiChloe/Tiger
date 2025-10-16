@@ -52,8 +52,8 @@ class MSTree:
         """
         current_leaves = self._get_leaf_nodes()
 
-        # if len(current_leaves) < M:
-        #     raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
+        if len(current_leaves) < M:
+            raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
         
         while len(current_leaves) > M:
             max_gain = -np.inf

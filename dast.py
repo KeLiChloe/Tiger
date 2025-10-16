@@ -52,8 +52,8 @@ class DASTree:
         """
         current_leaves = self._get_leaf_nodes()
 
-        # if len(current_leaves) < M:
-        #     raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
+        if len(current_leaves) < M:
+            raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
         
         while len(current_leaves) > M:
             max_gain = -np.inf
@@ -63,7 +63,6 @@ class DASTree:
                 if gain > max_gain:
                     max_gain = gain
                     candidate_node = node
-            # print(f"Pruning node with gain {max_gain:.4f} to reduce from {len(current_leaves)} to {M} leaves.")
             if candidate_node:
                 candidate_node.prune()
             current_leaves = self._get_leaf_nodes()

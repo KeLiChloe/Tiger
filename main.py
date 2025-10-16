@@ -17,6 +17,7 @@ import random
 import multiprocessing
 import pickle
 multiprocessing.set_start_method('fork') 
+import time
 
 param_range = {
     "alpha": (-10, 10),
@@ -34,7 +35,7 @@ d =  10 # dimensionality of covariates
 partial_x = 0.4 # if >0, only first {partial_x}% of x is used in outcome generation
 K = 8 # number of segments
 M_range = list(range(max(2, K-3), K+4))
-signal_covariate_noise = 4 # controls how similar x_i are within a segment
+signal_covariate_noise = 3 # controls how similar x_i are within a segment
 disturb_covariate_noise = 6
 noise_std = 5 # std of noise in outcome generation
 
@@ -46,11 +47,11 @@ N_total_implement_customers = N_total_pilot_customers
 
 DR_generation_method = "mlp" # "forest", "reg", or "mlp". For DAST only. Policytree uses "forest" by default. I suggest use "MLP".
 
-N_sims = 200 # Number of simulations to run
+N_sims = 1 # Number of simulations to run
 
 
 # algorithms =   ["gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da", "kmeans-partial" "clr-standard", "clr-da", "dast", "mst", "policy_tree", "policy_tree-buff"]
-algorithms =   [ 'dast', 'kmeans-standard', 'gmm-standard', 'clr-standard', 'mst'] # , 'clr-standard', 'mst', 'dast'
+algorithms =   [ 'dast', 'kmeans-standard', 'gmm-standard', 'clr-standard', 'mst', 'policy_tree'] # , 'clr-standard', 'mst', 'dast'
 
 exp_result_dict = {
     "exp_params": {
@@ -76,6 +77,7 @@ exp_result_dict = {
     "ambiguity_score": [],
 }
 
+start_time = time.time()
 
 for _ in trange(N_sims):
     
@@ -303,11 +305,15 @@ for _ in trange(N_sims):
     # print(f"Oracle profits: {oracle_profits_implementation['oracle_profit']:.2f}")
 
     # save the result after each simulation and print simulation number
-    save_file = "exp/main/5.pkl"
-    print(f"Completed {len(exp_result_dict['dast'])} / {N_sims} simulations.")
-    with open(save_file, "wb") as f:
-        print(f"Saving results to {save_file}")
-        pickle.dump(exp_result_dict, f)
+    # save_file = "exp/main/5.pkl"
+    # print(f"Completed {len(exp_result_dict['dast'])} / {N_sims} simulations.")
+    # with open(save_file, "wb") as f:
+    #     print(f"Saving results to {save_file}")
+    #     pickle.dump(exp_result_dict, f)
+
+end_time = time.time()
+print(f"Total time taken: {end_time - start_time:.2f} seconds.")
+
 
 
 # print mean value of overlap scores
