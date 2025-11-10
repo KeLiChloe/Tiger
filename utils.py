@@ -4,6 +4,10 @@ from ground_truth import PopulationSimulator
 from sklearn.linear_model import LinearRegression
 import pandas as pd
 import plotly.graph_objects as go
+import os
+import yaml
+import json
+import argparse
 
 def build_design_matrix(x_array, D_array):
     """Add intercept and treatment column to covariates."""
@@ -11,6 +15,10 @@ def build_design_matrix(x_array, D_array):
     intercept = np.ones((N, 1))
     D_col = D_array.reshape(-1, 1)
     return np.hstack([intercept, x_array, D_col])
+
+
+
+
 
 def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_labels, algo):
     """
@@ -30,6 +38,9 @@ def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_label
         
 
 def estimate_segment_parameters(X, D, Y):
+    Y = np.ravel(Y)
+    D = np.ravel(D)
+
     """Fit OLS model Y ~ x + D and return parameters ."""
     if len(X) < X.shape[1] + 1:
         # print("Warning: Not enough data to fit OLS.")
@@ -48,7 +59,9 @@ def estimate_segment_parameters(X, D, Y):
         return 404, np.ones(X.shape[1])*404, 404, 404
         
     else:
+        # compute est_tau as the mean difference in predicted outcomes when D=1 vs D=0
         est_tau = theta[-1]
+        est_tau_mean_diff = np.mean(Y[D==1]) - np.mean(Y[D==0])
         est_action = int(est_tau >= 0)
         return est_alpha, est_beta, est_tau, est_action
 
@@ -97,7 +110,7 @@ def compute_node_DR_value(Y, D, gamma, indices, buff):
     a_i = int(tau_hat >= 0)
     
     
-    if buff:
+    if buff is True:
         # Method 1: Direct + Gamma
         # If D_m[i] = a_i, then we get profit Y_m[i]
         # If D_m[i] != a_i, then we get profit gamma_a_i_m[i]
@@ -113,53 +126,46 @@ def compute_node_DR_value(Y, D, gamma, indices, buff):
     return value
 
 
-def compute_residual_value(X, Y, D, indices):
-    # Subset the data
-    X_m = X[indices]
-    D_m = D[indices].reshape(-1, 1)
-    Y_m = Y[indices].reshape(-1, 1)
-
-    # Construct the design matrix: [intercept | X | D]
-    X_design = build_design_matrix(X_m, D_m)
+def evaluate_on_validation(pop: PopulationSimulator, algo, Gamma_val, customers=None):
+    """
+    Evaluate estimated policy on a set of customers using doubly-robust value.
     
-    # Fit the linear model
-    model = LinearRegression(fit_intercept=False).fit(X_design, Y_m)
+    Args:
+        pop: PopulationSimulator object
+        algo: Algorithm name
+        Gamma_val: Gamma matrix for the customers
+        customers: List of customers to evaluate (default: pop.val_customers)
+    """
+    # Use validation customers by default, or specified customers
+    if customers is None:
+        customers = pop.val_customers
     
-    # Predict
-    Y_pred = model.predict(X_design)
-
-    # Compute residuals
-    residuals = np.sum((Y_m - Y_pred) ** 2)
-
-    return residuals/len(indices)
-    # return residuals
-
-def evaluate_on_validation(pop: PopulationSimulator, algo):
-    # the validation customers need to have already been assigned to estimated segments
-    
-    if len(pop.val_customers) == 0:
+    if len(customers) == 0:
         return None
-    
-    Gamma_val = pop.gamma[[cust.customer_id for cust in pop.val_customers]]
 
     V = 0
-    for i, cust in enumerate(pop.val_customers):
+    for i, cust in enumerate(customers):
         assigned_action = cust.est_segment[algo].est_action
-        if assigned_action == 404 and algo != "mst" and algo != "policy_tree" and algo != "policy_tree-buff":
-            # print("404!!!!")
-            assigned_action = cust.true_segment.action
-            cust.est_segment[algo].est_action = cust.true_segment.action
-        else:
-            # randomly assign action
-            assigned_action = np.random.choice([0, 1])
-            cust.est_segment[algo].est_action = assigned_action
+        
+        # BUG FIX: Only handle the case when action is undecided (404)
+        if assigned_action == 404:
+            # For algorithms that can't decide (action=404), need a fallback
+            if algo in ["mst", "policy_tree", "policy_tree-buff"]:
+                # These algorithms may randomly assign when undecided
+                assigned_action = np.random.choice([0, 1])
+                cust.est_segment[algo].est_action = assigned_action
+            else:
+                # For other algorithms (dast, kmeans, gmm, clr), use true action as fallback
+                assigned_action = cust.true_segment.action
+                cust.est_segment[algo].est_action = cust.true_segment.action
+        # Otherwise, use the estimated action (0 or 1) directly - no modification needed!
         
         if int(assigned_action) == int(cust.D_i):
             V += cust.y
         else:
             V += Gamma_val[i, assigned_action]
 
-    return V / len(pop.val_customers)
+    return V / len(customers)
 
 def assign_new_customers_to_segments(pop: PopulationSimulator, customers, model, algo):
     """
@@ -181,17 +187,104 @@ def assign_new_customers_to_segments(pop: PopulationSimulator, customers, model,
 
 
 def pick_M_for_algo(algo, df_results_M):
-    max_val = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", "policy_tree-buff", "dast", "mst", "kmeans-standard"]
-    min_val = ["gmm-standard", "clr-standard"]
-    if algo in max_val:
-        algo_picked_M = {
-            f'{algo}_picked_M': df_results_M.at[df_results_M[f'{algo}_val'].idxmax(), 'M'],
-        }
-    elif algo in min_val: 
-        algo_picked_M = {
-            f'{algo}_picked_M': df_results_M.at[df_results_M[f'{algo}_val'].idxmin(), 'M'],
-        }
-    else:
+    """
+    Select optimal M for algorithm based on validation score.
+    
+    Tie-breaking rule: When multiple M have the same validation score,
+    select the SMALLEST M (Occam's Razor - prefer simpler models).
+    """
+    val_col = f'{algo}_val'
+    max_val_algos = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", 
+                     "policy_tree-buff", "dast", "mst", "kmeans-standard"]
+    min_val_algos = ["gmm-standard", "clr-standard"]
+    
+    if algo not in max_val_algos and algo not in min_val_algos:
         raise ValueError(f"Unknown algorithm: {algo}")
     
-    return algo_picked_M
+    is_maximize = algo in max_val_algos
+    
+    # Find all M with best validation score
+    if is_maximize:
+        best_score = df_results_M[val_col].max()
+        candidates = df_results_M[df_results_M[val_col] == best_score]
+    else:
+        best_score = df_results_M[val_col].min()
+        candidates = df_results_M[df_results_M[val_col] == best_score]
+    
+    # Tie-breaking: Always select smallest M
+    picked_M = int(candidates['M'].min())
+    
+    return {f'{algo}_picked_M': picked_M}
+
+
+
+def load_config(config_path):
+    """Load configuration from YAML or JSON file."""
+    if not os.path.exists(config_path):
+        print(f"⚠️ Config file not found: {config_path}. Using defaults.")
+        return {}
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        if config_path.endswith(".yaml") or config_path.endswith(".yml"):
+            return yaml.safe_load(f)
+        elif config_path.endswith(".json"):
+            return json.load(f)
+        else:
+            raise ValueError("Unsupported config format. Use .yaml or .json")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Simulation configuration for experiment")
+
+    parser.add_argument("--config", type=str, default="config.yml", help="Path to configuration file")
+    
+    parser.add_argument("--plot", action="store_true", help="Enable plotting")
+    parser.add_argument("--compute_overlap", action="store_true", help="Compute overlap between segments")
+    parser.add_argument("--debug_comparison", action="store_true", help="Enable detailed debug comparison of segment estimates")
+
+
+    parser.add_argument("--alpha_range", type=float, nargs=2, help="Range for alpha parameter")
+    parser.add_argument("--beta_range", type=float, nargs=2, help="Range for beta parameter")
+    parser.add_argument("--tau_range", type=float, nargs=2, help="Range for tau parameter")
+    parser.add_argument("--x_mean_range", type=float, nargs=2, help="Range for x_mean parameter")
+
+    
+    parser.add_argument("--N_segment_size", type=int, help="Number of customers per segment")
+    parser.add_argument("--d", type=int, help="Dimensionality of covariates")
+    parser.add_argument("--partial_x", type=float, help="Fraction of x used in outcome generation")
+    parser.add_argument("--K", type=int, help="Number of segments")
+    parser.add_argument("--disallowed_ball_radius", type=float, help="Minimum distance between mean vectors as scale factor (e.g., 0.8 means min_dist = 0.8 * space_range/K^(1/d)). Default: 0.5")
+    parser.add_argument("--X_noise_std_scale", type=float, required=True, help="Scale factor for within-cluster covariate noise as a multiple of average distance between mean vectors")
+    parser.add_argument("--disturb_covariate_noise", type=float, help="Covariate noise across segments")
+    parser.add_argument("--Y_noise_std_scale", type=float, required=True, help="Scale factor for outcome noise as a multiple of average |tau| (treatment effect magnitude)")
+    
+
+    parser.add_argument("--kmeans_coef", type=float, help="Coefficient for k-means weighting")
+    
+
+    parser.add_argument("--DR_generation_method", type=str, choices=["mlp", "forest", "reg"],
+                        help="DR generation method (for DAST only)")
+    
+    parser.add_argument("--implementation_scale", type=float, help="Scale of implementation population")
+
+    parser.add_argument("--N_sims", type=int, help="Number of simulations to run")
+    
+    parser.add_argument("--save_file", type=str, help="Path to save experiment results")
+
+    # 算法列表
+    parser.add_argument("--algorithms", type=str, nargs="+",
+                        help="List of algorithms to run")
+
+    args = parser.parse_args()
+    return args
+
+
+from types import SimpleNamespace
+
+def merge_config(args, config):
+    merged = dict(config)
+    for key, value in vars(args).items():
+        if value is not None:
+            merged[key] = value
+    return SimpleNamespace(**merged)
+

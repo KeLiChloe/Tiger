@@ -166,7 +166,8 @@ def CLR_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         return bic, CLR
     elif model_selection == "da":
         assign_new_customers_to_segments(pop, pop.val_customers, CLR, algo)
-        DA_score = evaluate_on_validation(pop, algo=algo)
+        Gamma_val = pop.gamma[[cust.customer_id for cust in pop.val_customers]]
+        DA_score = evaluate_on_validation(pop, algo=algo, Gamma_val=Gamma_val)
         return  DA_score, CLR
     else:
         raise ValueError("model_selection must be either 'standard' or 'da'")

@@ -1,6 +1,7 @@
 import pickle
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import stats
 
 
 
@@ -11,23 +12,30 @@ def print_params(data):
         dast_parameters = {
                 'K': data.get('K'),
                 'd': data.get('d'),
-                'signal_covariate_noise': data.get('signal_covariate_noise'),
-                'disturb_covariate_noise': data.get('disturb_covariate_noise'),
-                'noise_std': data.get('noise_std'),
+                'X_noise_std_scale': data.get('X_noise_std_scale'),
+                'Y_noise_std_scale': data.get('Y_noise_std_scale'),
                 'tau_param_range': data.get('param_range').get('tau'),
                 'x_param_range': data.get('param_range').get('x_mean'),
-
+                'partial_x' : data.get('partial_x'),
+                'N_segment_size': data.get('N_segment_size'),
+                'implementation_scale': data.get('implementation_scale', 1),
+                'disallowed_ball_radius': data.get('disallowed_ball_radius'),
+                'seed': data.get('seed'),
                 
         }
     else:
         dast_parameters = {
             'K': data.get('exp_params').get('K'),
             'd': data.get('exp_params').get('d'),
-            'signal_covariate_noise': data.get('exp_params').get('signal_covariate_noise'),
-            'disturb_covariate_noise': data.get('exp_params').get('disturb_covariate_noise'),
-            'noise_std': data.get('exp_params').get('noise_std'),
+            'X_noise_std_scale': data.get('exp_params').get('X_noise_std_scale'),
+            'Y_noise_std_scale': data.get('exp_params').get('Y_noise_std_scale'),
             'tau_param_range': data.get('exp_params').get('param_range').get('tau'),
             'x_param_range': data.get('exp_params').get('param_range').get('x_mean'),
+            'partial_x' : data.get('exp_params').get('partial_x'),
+            'N_segment_size': data.get('exp_params').get('N_segment_size'),
+            'implementation_scale': data.get('exp_params').get('implementation_scale', 1),
+            'disallowed_ball_radius': data.get('exp_params').get('disallowed_ball_radius'),
+            'seed': data.get('exp_params').get('seed'),
     }
         
     # overlap_scores = {              # overlap
@@ -65,7 +73,7 @@ def filter_ratios(improvement_ratios, apply_remove_extreme, apply_sigma_clip):
 
         # --- Step 1: Remove 3 extreme values,  both min and max(OPTIONAL) ---
         if apply_remove_extreme.get(comp, False):
-            min_indices = np.argsort(ratios_np)[:0]
+            min_indices = np.argsort(ratios_np)[:1]
             mask = np.ones_like(ratios_np, dtype=bool)
             mask[min_indices] = False
             ratios_np = ratios_np[mask]  
@@ -89,7 +97,28 @@ def plot(filtered_ratios):
     # === Print Summary After Outlier Removal ===
     print("\n📊 Summary After Outlier Removal:\n")
     for comp, ratios in filtered_ratios.items():
-        print(f"{comp:>12}: {len(ratios)} runs | Avg Improvement: {np.mean(ratios):.4%}")
+        n = len(ratios)
+        mean = np.mean(ratios)
+        std = np.std(ratios, ddof=1)  # Sample standard deviation (ddof=1)
+        
+        # Calculate 95% Confidence Interval
+        if n >= 30:
+            # Large sample: use normal distribution (z-score = 1.96 for 95% CI)
+            z_critical = 1.96
+            se = std / np.sqrt(n)  # Standard error
+            margin_error = z_critical * se
+            ci_lower = mean - margin_error
+            ci_upper = mean + margin_error
+        else:
+            # Small sample: use t-distribution
+            t_critical = stats.t.ppf(0.975, df=n-1)  # 95% CI, two-tailed
+            se = std / np.sqrt(n)  # Standard error
+            margin_error = t_critical * se
+            ci_lower = mean - margin_error
+            ci_upper = mean + margin_error
+        
+        print(f"{comp:>20}: {n:3d} runs | Avg Improvement: {mean*100:7.2f}% | "
+              f"95% CI: [{ci_lower*100:7.2f}%, {ci_upper*100:7.2f}%]")
 
     # === Plot Boxplot with Mean Markers ===
     plt.figure(figsize=(10, 6))
@@ -99,6 +128,7 @@ def plot(filtered_ratios):
     # Plot means as red dots
     for i, comp in enumerate(comparators):
         mean = np.mean(filtered_ratios[comp])
+        # compute standard deviation of the ratios
         plt.scatter(i + 1, mean, color='red', label=f'DAST avg improvement ratio over {comp}: {mean:.2%}')
 
     # Unique legend
@@ -114,12 +144,10 @@ def plot(filtered_ratios):
     # plt.show()
 
 # === Load Data ===
-file_path = "exp/main/4.pkl"  # Make sure this is the correct path on your machine
-
+file_path = "exp_11.08/main/varying_K/result_K3.pkl"  # Make sure this is the correct path on your machine7
 with open(file_path, "rb") as f:
     data = pickle.load(f)
 
-save_ratio = False
 
 # comparators = [ "gmm", "mst", "kmeans", "policy_tree"]
 # comparators = ["gmm-standard", "gmm-da"]
@@ -140,28 +168,13 @@ apply_remove_extreme = {
                         "mst": False,
                         "clr-standard": False
                         }
-apply_sigma_clip = False
+apply_sigma_clip = True
 
 print_params(data)
 
-if 'filtered_ratios' in data:
-    filtered_ratios = data['filtered_ratios']
-    # print sorted filtered ratios
-    for comp in comparators:
-        print(f"{comp:>12}: ", end="")
-        sorted_ratios = np.sort(filtered_ratios[comp])
-        print(sorted_ratios)
 
-else:
-    ratios = compute_improvement_ratio(data, comparators)
-    filtered_ratios = filter_ratios(ratios, apply_remove_extreme, apply_sigma_clip)
-    
-    if save_ratio:
-        data['filtered_ratios'] = filtered_ratios
-        save_file = f"{file_path.split('.')[0]}_ratios.pkl"
-        with open(save_file, "wb") as f:
-            print(f"Saving results to {save_file}")
-            pickle.dump(data, f)
+ratios = compute_improvement_ratio(data, comparators)
+filtered_ratios = filter_ratios(ratios, apply_remove_extreme, apply_sigma_clip)
 
 
 plot(filtered_ratios)

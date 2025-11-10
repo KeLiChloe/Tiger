@@ -8,7 +8,7 @@ import rpy2.robjects as ro
 from rpy2.robjects import numpy2ri, default_converter
 from rpy2.robjects.packages import importr
 from rpy2.robjects.conversion import localconverter
-from scipy.spatial.distance import pdist
+from scipy.spatial.distance import pdist, squareform
 
 
 ALGORITHMS = ["gmm-standard", "gmm-da", "dast", "policy_tree", "policy_tree-buff", "mst", "kmeans-standard", "kmeans-da", "clr-standard", "clr-da"]
@@ -65,14 +65,14 @@ class Customer_implement:
         if self.est_segment[algo].est_action != 404:
             self.implement_action = self.est_segment[algo].est_action 
         
-        else: # 404 case for tree based algorithms
-            if algo in ["policy_tree", "policy_tree-buff", "mst", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
-                self.implement_action = 1-self.true_segment.action
-            else:
-                # print("404",algo)
-                self.implement_action = self.true_segment.action
+        else: # 404 case
+            self.implement_action = self.true_segment.action
         
-        self.y = self.true_segment.generate_outcome(self.x, self.implement_action, self.noise_std, self.signal_d)
+        # Option 1: No noise for deterministic profit evaluation (current)
+        noise_std = 0 # set noise to 0 for profit evaluation
+        # Option 2: Use actual noise (uncomment line below to enable)
+        # noise_std = self.noise_std  
+        self.y = self.true_segment.generate_outcome(self.x, self.implement_action, noise_std, self.signal_d)
         return self.y
         
 # ----------------------------------------
@@ -80,20 +80,55 @@ class Customer_implement:
 # ----------------------------------------
 
 class PopulationSimulator:
-    def __init__(self, N_total_pilot_customers, N_total_implement_customers, d, K, signal_covariate_noise, disturb_covariate_noise, param_range, noise_std, DR_generation_method, partial_x):
+    def __init__(self, N_total_pilot_customers, N_total_implement_customers, d, K, disturb_covariate_noise, param_range, DR_generation_method, partial_x, X_mean_vectors=None, X_noise_std_scale=None, Y_noise_std_scale=None, disallowed_ball_radius=None):
         self.N_total_pilot_customers = N_total_pilot_customers
         self.N_total_implement_customers = N_total_implement_customers
         self.d = d
         self.K = K
         
         self.param_range = param_range
-        self.noise_std = noise_std # Controls the noise in outcome generation
-        self.signal_covariate_noise = signal_covariate_noise  
         self.disturb_covariate_noise = disturb_covariate_noise
         self.signal_d = d if partial_x == 0 else max(1, int(d * partial_x))  # number of features used in outcome generation
         self.disturb_d = d - self.signal_d  # number of features NOT used in outcome generation
+        self.disallowed_ball_radius = disallowed_ball_radius if disallowed_ball_radius is not None else 0.5
 
-        self.true_segments = self._init_true_segments()
+        self.true_segments = self._init_true_segments(X_mean_vectors)
+        
+        # Compute signal_covariate_noise based on X_noise_std_scale (required parameter)
+        if X_noise_std_scale is None:
+            raise ValueError("X_noise_std_scale is required. Please provide a scale factor for within-cluster covariate noise.")
+        
+        if self.K <= 1:
+            raise ValueError(f"Cannot use X_noise_std_scale with K={self.K}. Need at least 2 clusters to compute average distance.")
+        
+        # Extract signal dimensions of mean vectors (only first signal_d dimensions)
+        mean_vectors_signal = np.array([seg.x_mean[:self.signal_d] for seg in self.true_segments])
+        # Compute pairwise distances
+        pairwise_distances = pdist(mean_vectors_signal, metric='euclidean')
+        
+        if len(pairwise_distances) == 0:
+            raise ValueError(f"No pairwise distances computed for K={self.K} clusters. This should not happen. Please check the data.")
+        
+        # Average distance
+        avg_distance = np.mean(pairwise_distances)
+        # Set signal_covariate_noise as scale times average distance
+        self.signal_covariate_noise = X_noise_std_scale * avg_distance
+        print(f"Computed X_covariate_noise: {self.signal_covariate_noise:.4f} (scale={X_noise_std_scale}, avg_distance={avg_distance:.4f})")
+        
+        # NOW adjust tau for adjacent clusters (after signal_covariate_noise is set)
+        # self._adjust_adjacent_cluster_tau()
+        
+        # Compute noise_std based on Y_noise_std_scale (required parameter)
+        if Y_noise_std_scale is None:
+            raise ValueError("Y_noise_std_scale is required. Please provide a scale factor for outcome noise.")
+        
+        # Compute average treatment effect magnitude across segments
+        tau_values = np.array([seg.tau for seg in self.true_segments])
+        avg_tau_magnitude = np.mean(np.abs(tau_values))
+        # Set noise_std as scale times average |tau|
+        self.noise_std = Y_noise_std_scale * avg_tau_magnitude
+        print(f"Computed Ynoise_std: {self.noise_std:.4f} (scale={Y_noise_std_scale}, avg_|tau|={avg_tau_magnitude:.4f})")
+        
         self.pilot_customers = self._generate_pilot_customers()
         self.implement_customers = self._generate_implement_customers()
         
@@ -104,72 +139,162 @@ class PopulationSimulator:
         self.train_customers, self.val_customers, self.train_indices, self.val_indices = None, None, None, None
         
             
-    def _init_true_segments(self):
+    def _init_true_segments(self, X_mean_vectors):
         pr = self.param_range  # alias for convenience
         true_segments = []
-        for k in range(self.K):
-            alpha = np.random.uniform(*pr["alpha"])
-            beta = np.random.uniform(*pr["beta"], size=self.d)
-            tau = np.random.uniform(*pr["tau"])
-            x_mean = np.random.uniform(*pr["x_mean"], size=self.signal_d)
-            true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean))
+        
+        # If generating mean vectors, use minimum distance constraint
+        if X_mean_vectors is None:
+            # Calculate a reasonable minimum distance based on space size
+            space_range = pr["x_mean"][1] - pr["x_mean"][0]
+            # Heuristic: min distance should be at least space_range / (K^(1/d))
+            # This ensures clusters can be reasonably separated
+            min_distance = (space_range / (self.K ** (1.0 / self.d))) * self.disallowed_ball_radius
+            print(f"Generating mean vectors with minimum distance: {min_distance:.2f}")
+            
+            generated_means = []
+            for k in range(self.K):
+                alpha = np.random.uniform(*pr["alpha"])
+                beta = np.random.uniform(*pr["beta"], size=self.d)
+                tau = np.random.uniform(*pr["tau"])
+                
+                # Generate x_mean with minimum distance constraint
+                max_attempts = 100
+                for attempt in range(max_attempts):
+                    x_mean_candidate = np.random.uniform(*pr["x_mean"], size=self.d)
+                    
+                    # Check distance to all existing means
+                    if len(generated_means) == 0:
+                        x_mean = x_mean_candidate
+                        break
+                    
+                    distances = [np.linalg.norm(x_mean_candidate - existing) 
+                                for existing in generated_means]
+                    min_dist_to_existing = min(distances)
+                    
+                    if min_dist_to_existing >= min_distance:
+                        x_mean = x_mean_candidate
+                        break
+                    
+                    if attempt == max_attempts - 1:
+                        print(f"⚠️  Warning: Could not find mean vector for cluster {k} satisfying min distance.")
+                        print(f"   Using best candidate with distance {min_dist_to_existing:.2f}")
+                        x_mean = x_mean_candidate
+                
+                generated_means.append(x_mean)
+                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean))
+        else:
+            # Use provided mean vectors
+            for k in range(self.K):
+                alpha = np.random.uniform(*pr["alpha"])
+                beta = np.random.uniform(*pr["beta"], size=self.d)
+                tau = np.random.uniform(*pr["tau"])
+                x_mean = X_mean_vectors[k]
+                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean))
         
         return true_segments
-
-        # while True:
-        #     beta_check = []
-        #     tau_check = []
-        #     true_segments = []
-        #     for k in range(self.K):
-        #         alpha = np.random.uniform(*pr["alpha"])
-        #         beta = np.random.uniform(*pr["beta"], size=self.d)
-        #         tau = np.random.uniform(*pr["tau"])
-        #         x_mean = np.random.uniform(*pr["x_mean"], size=self.d)
-        #         true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean))
-        #         beta_check.append(beta)
-        #         tau_check.append(tau)
-            
-        #     # Check if the beta vectors are sufficiently distinct and not all tau are positive nor negative
-        #     beta_check = np.array(beta_check)
-        #     tau_check = np.array(tau_check)
-        #     if np.min(pdist(beta_check, metric="euclidean")) > 3 and not np.all(tau_check > 0) and not np.all(tau_check < 0):
-        #         return true_segments
-
+    
+    # def _adjust_adjacent_cluster_tau(self):
+    #     """
+    #     Make sure "adjacent but not overlapping" clusters have opposite treatment effect signs.
+    #     Adjacent means: distance ≈ 1-3 sigma (touching at boundaries, not fully overlapping).
+    #     This creates a challenging scenario for algorithms.
+    #     """
+    #     if self.K < 2:
+    #         return
         
+    #     # Extract mean vectors (only signal dimensions matter for clustering)
+    #     mean_vectors_signal = np.array([seg.x_mean[:self.signal_d] for seg in self.true_segments])
+        
+    #     # Compute pairwise distances in signal space
+    #     dist_matrix = squareform(pdist(mean_vectors_signal, metric='euclidean'))
+        
+    #     # Set diagonal to infinity to exclude self-distances
+    #     np.fill_diagonal(dist_matrix, np.inf)
+        
+    #     # Define "adjacent" as distance in range [lower_bound, upper_bound]
+    #     # This means clusters touch at boundaries but don't heavily overlap
+    #     sigma = self.signal_covariate_noise
+    #     lower_bound = 1.0 * sigma  # Closer than this = too much overlap
+    #     upper_bound = 4.0 * sigma  # Farther than this = well separated
+        
+    #     # Find pairs in the "adjacent" range
+    #     adjacent_pairs = []
+    #     for i in range(self.K):
+    #         for j in range(i+1, self.K):
+    #             dist = dist_matrix[i, j]
+    #             if lower_bound <= dist <= upper_bound:
+    #                 adjacent_pairs.append((i, j, dist))
+        
+    #     if adjacent_pairs:
+    #         # Pick the pair with distance closest to 2*sigma (sweet spot for "touching")
+    #         target_dist = 2.0 * sigma
+    #         best_pair = min(adjacent_pairs, key=lambda x: abs(x[2] - target_dist))
+    #         idx1, idx2, dist = best_pair
+            
+    #         tau1 = self.true_segments[idx1].tau
+    #         tau2 = self.true_segments[idx2].tau
+    #         action1_before = self.true_segments[idx1].action
+    #         action2_before = self.true_segments[idx2].action
+            
+    #         # If they have the same sign, flip one of them
+    #         if tau1 * tau2 > 0:  # Same sign (both positive or both negative)
+    #             # Flip the sign of tau2
+    #             self.true_segments[idx2].tau = -tau2
+    #             self.true_segments[idx2].action = int(self.true_segments[idx2].tau >= 0)
+                
+    #             action2_after = self.true_segments[idx2].action
+                
+    #             print(f"⚠️  Adjacent clusters (segments {idx1} and {idx2}) had same tau sign.")
+    #             print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
+    #             print(f"   BEFORE flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={tau2:+7.2f} action={action2_before}")
+    #             print(f"   AFTER  flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={-tau2:+7.2f} action={action2_after}")
+    #         else:
+    #             print(f"✓ Adjacent clusters (segments {idx1} and {idx2}) already have opposite tau signs.")
+    #             print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
+    #             print(f"   Seg{idx1}: tau={tau1:+7.2f}, Seg{idx2}: tau={tau2:+7.2f}")
+
     def _generate_pilot_customers(self):
         pilot_customers = []
 
-        cov_signal = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
-        cov_noise = np.eye(self.disturb_d) * (self.disturb_covariate_noise ** 2)
-
-        # 噪声的“总体”分布（所有簇共享）
-        global_noise_mean = np.random.uniform(*self.param_range["x_mean"], size=self.disturb_d)
-
+        cov_signal = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2) 
+        if self.disturb_d > 0:
+            # === 1️⃣ Generate adversarial noise clusters ===
+            cov_noise = np.eye(self.disturb_d) * (self.disturb_covariate_noise ** 2)
+            N_noise_clusters = max(1, int(np.random.uniform(self.K - 5, self.K + 5)))
+            noise_cluster_means = [
+                np.random.uniform(*self.param_range["x_mean"], size=self.disturb_d)
+                for _ in range(N_noise_clusters)
+            ]
+            noise_cluster_labels = np.random.randint(
+                0, N_noise_clusters, size=self.N_total_pilot_customers
+            )
         for i in range(self.N_total_pilot_customers):
-            # 1️⃣ 选真实 segment
+            # 2️⃣ Choose true segment for signal part
             segment = np.random.choice(self.true_segments)
 
-            # 2️⃣ signal 部分：根据 segment 的 mean 生成
+            # 3️⃣ Signal features: cluster-dependent
             x_signal = np.random.multivariate_normal(mean=segment.x_mean, cov=cov_signal)
 
-            # 3️⃣ noise 部分：
-            #    所有簇共用一个大体分布，但加一点点簇内扰动
-            small_shift = np.random.normal(0, 1, size=self.disturb_d)  # 轻微簇差异
-            x_noise = np.random.multivariate_normal(mean=global_noise_mean + small_shift,
-                                                    cov=cov_noise)
+            # 4️⃣ Disturbing features: come from random noise cluster
+            if self.disturb_d > 0:
+                w = noise_cluster_labels[i]
+                x_noise = np.random.multivariate_normal(mean=noise_cluster_means[w], cov=cov_noise)
+                x_full = np.concatenate([x_signal, x_noise])
 
-            # 4️⃣ 拼接 signal + noise
-            x_full = np.concatenate([x_signal, x_noise])
+            else:
+                x_full = x_signal
 
-            # 5️⃣ outcome
+            # 6️⃣ Outcome
             D_i = np.random.binomial(1, 0.5)
             y = segment.generate_outcome(x_full, D_i, self.noise_std, self.signal_d)
 
-            # 6️⃣ 保存
+            # 7️⃣ Save
             cust = Customer_pilot(x_full, D_i, y, segment, customer_id=i)
             pilot_customers.append(cust)
 
         return pilot_customers
+
 
 
     
@@ -177,29 +302,44 @@ class PopulationSimulator:
     def _generate_implement_customers(self):
         implement_customers = []
 
-        # --- 信号和噪声协方差 ---
+        # --- Signal and noise covariance ---
         cov_signal = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
-        cov_noise = np.eye(self.disturb_d) * (self.disturb_covariate_noise ** 2)
+        
 
-        # --- 噪声的“总体”分布（所有簇共享） ---
-        global_noise_mean = np.random.uniform(*self.param_range["x_mean"], size=self.disturb_d)
+        # === 1️⃣  noise clusters ===
+        if self.disturb_d > 0:
+            cov_noise = np.eye(self.disturb_d) * (self.disturb_covariate_noise ** 2)
+            N_noise_clusters = max(1, int(np.random.uniform(self.K - 5, self.K + 5)))
+
+            # Randomly position these noise cluster means
+            noise_cluster_means = [
+                np.random.uniform(*self.param_range["x_mean"], size=self.disturb_d)
+                for _ in range(N_noise_clusters)
+            ]
+
+            # Assign each implement customer to a random noise cluster
+            noise_cluster_labels = np.random.randint(
+                0, N_noise_clusters, size=self.N_total_implement_customers
+            )
 
         for i in range(self.N_total_implement_customers):
-            # 1️⃣ 选真实 segment
+            # 2️⃣ Choose true signal segment (same as before)
             segment = np.random.choice(self.true_segments)
 
-            # 2️⃣ signal 部分（每个簇自己的均值）
+            # 3️⃣ Signal part: segment-dependent
             x_signal = np.random.multivariate_normal(mean=segment.x_mean, cov=cov_signal)
 
-            # 3️⃣ noise 部分（几乎相同的分布 + 轻微漂移）
-            small_shift = np.random.normal(0, 2, size=self.disturb_d)
-            x_noise = np.random.multivariate_normal(mean=global_noise_mean + small_shift,
-                                                    cov=cov_noise)
+            # 4️⃣ Noise part: from an unrelated latent noise cluster
+            if self.disturb_d > 0:
+                w = noise_cluster_labels[i]
+                x_noise = np.random.multivariate_normal(mean=noise_cluster_means[w], cov=cov_noise)
 
-            # 4️⃣ 拼接信号 + 噪声
-            x_full = np.concatenate([x_signal, x_noise])
+                # 5️⃣ Combine signal + noise
+                x_full = np.concatenate([x_signal, x_noise])
+            else:
+                x_full = x_signal
 
-            # 5️⃣ 建立 customer 对象
+            # 6️⃣ Create Customer_implement object
             cust = Customer_implement(x_full, segment, self.noise_std, self.signal_d)
             implement_customers.append(cust)
 
@@ -207,10 +347,11 @@ class PopulationSimulator:
 
 
 
+
     # ---------- NEW: overlap function ----------
     def compute_covariate_overlap(self):
         """Compute average Bhattacharyya coefficient of X distributions across true segments."""
-        Sigma = np.eye(self.d) * (self.covariate_noise ** 2)   # dxd covariance matrix
+        Sigma = np.eye(self.d) * (self.signal_covariate_noise ** 2)   # dxd covariance matrix
         Sigma_inv = np.linalg.inv(Sigma)                       # its inverse
         K = self.K
 
@@ -229,7 +370,7 @@ class PopulationSimulator:
 
     def compute_outcome_overlap(self):
         """Compute average Bhattacharyya coefficient of Y distributions across true segments."""
-        Sigma = np.eye(self.d) * (self.covariate_noise ** 2)
+        Sigma = np.eye(self.d) * (self.signal_covariate_noise ** 2)
         sigma = self.noise_std
         K = self.K
 
@@ -263,7 +404,7 @@ class PopulationSimulator:
 
     def compute_joint_overlap(self):
         """Compute average Bhattacharyya coefficient of (x,y) distributions across true segments."""
-        Sigma = np.eye(self.d) * (self.covariate_noise ** 2)
+        Sigma = np.eye(self.d) * (self.signal_covariate_noise ** 2)
         sigma = self.noise_std
         K = self.K
 
@@ -317,7 +458,7 @@ class PopulationSimulator:
         
         N, d = X.shape
         K = self.K
-        Sigma = np.eye(d) * (self.covariate_noise ** 2)
+        Sigma = np.eye(d) * (self.signal_covariate_noise ** 2)
         Sigma_inv = np.linalg.inv(Sigma)
         logdet_Sigma = np.log(np.linalg.det(Sigma))
         sigma2 = self.noise_std ** 2

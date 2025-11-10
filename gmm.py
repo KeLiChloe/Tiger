@@ -1,6 +1,7 @@
 from sklearn.mixture import GaussianMixture
 from ground_truth import PopulationSimulator, SegmentEstimate
-from utils import assign_trained_customers_to_segments, estimate_segment_parameters, evaluate_on_validation, assign_new_customers_to_segments
+from utils import assign_trained_customers_to_segments, evaluate_on_validation, assign_new_customers_to_segments
+from sklearn.linear_model import LinearRegression
 import numpy as np
 
 
@@ -45,7 +46,21 @@ def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         return bic, gmm_model
     elif model_selection == "da":
         assign_new_customers_to_segments(pop, pop.val_customers, gmm_model, algo)
-        DA_score = evaluate_on_validation(pop, algo=algo)
+        Gamma_val = pop.gamma[[cust.customer_id for cust in pop.val_customers]]
+        DA_score = evaluate_on_validation(pop, algo=algo, Gamma_val=Gamma_val)
         return  DA_score,gmm_model
     else:
         raise ValueError("model_selection must be either 'standard' or 'da'")
+    
+
+def estimate_segment_parameters(X, D, Y):
+
+    X_design = np.hstack((np.ones((X.shape[0], 1)), X))
+    
+    model = LinearRegression(fit_intercept=False).fit(X_design, Y)
+    theta = model.coef_.ravel()
+    est_alpha = theta[0]
+    est_beta = theta[1:]
+    est_tau = np.mean(Y[D==1]) - np.mean(Y[D==0])
+    est_action = int(est_tau >= 0)
+    return est_alpha, est_beta, est_tau, est_action

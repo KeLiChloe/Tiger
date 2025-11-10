@@ -58,7 +58,7 @@ def compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth):
         Gamma = ro.conversion.rpy2py(Gamma_r)
     return Gamma
 
-def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, target_leaf_num: int, x_mat, D_vec, y_vec, buff):
+def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, target_leaf_num: int, x_mat_tr, D_vec_tr, y_vec_tr, x_mat_val, D_vec_val, y_vec_val, buff):
     """
     Perform policy tree-based segmentation and OLS-based estimation per segment.
 
@@ -69,15 +69,19 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
     """
     
     with localconverter(default_converter + numpy2ri.converter):
-        X_r = ro.conversion.py2rpy(x_mat)
-        y_r = ro.conversion.py2rpy(y_vec)
-        D_r = ro.conversion.py2rpy(D_vec)
+        X_r_tr = ro.conversion.py2rpy(x_mat_tr)
+        y_r_tr = ro.conversion.py2rpy(y_vec_tr)
+        D_r_tr = ro.conversion.py2rpy(D_vec_tr)
+        
+        X_r_val = ro.conversion.py2rpy(x_mat_val)
+        y_r_val = ro.conversion.py2rpy(y_vec_val)
+        D_r_val = ro.conversion.py2rpy(D_vec_val)
     
     if buff:
-        compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth) # just to build the tree in R env
-        Gamma = np.array(pop.gamma[[cust.customer_id for cust in pop.train_customers]])  # shape (N, 2)
+        compute_gamma_in_policy_tree_R(X_r_tr, y_r_tr, D_r_tr, depth) # just to build the tree in R env
+        Gamma_tr = np.array(pop.gamma[[cust.customer_id for cust in pop.train_customers]])  # shape (N, 2)
     else:
-        Gamma = compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth)
+        Gamma_tr = compute_gamma_in_policy_tree_R(X_r_tr, y_r_tr, D_r_tr, depth)
     
     # Extract tree structure
     leaf_to_parent_r = ro.r('extract_leaf_parent_map(tree)')
@@ -88,19 +92,19 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
 
     # Predict segments/actions for training set
     tree = ro.r('tree')
-    segment_r = policytree.predict_policy_tree(tree, X_r, type="node.id")
-    action_r = policytree.predict_policy_tree(tree, X_r, type="action.id")
+    segment_r = policytree.predict_policy_tree(tree, X_r_tr, type="node.id")
+    action_r = policytree.predict_policy_tree(tree, X_r_tr, type="action.id")
     segment_labels_raw = list(ro.conversion.rpy2py(segment_r))
 
     action_ids_raw = list(ro.conversion.rpy2py(action_r))  # (by default value 1 = action 0 (1st col in Gamma), value 2 = action 1 (2nd col in Gamma) )
     action_ids = np.array([a - 1 for a in action_ids_raw]) # Normalize segment and action labels to start from 0
     
     segment_labels_pruned, action_ids_pruned, leaf_to_pruned_segment = post_prune_tree(
-        Y = y_vec,
-        D = D_vec,
+        Y = y_vec_tr,
+        D = D_vec_tr,
         segment_labels=np.array(segment_labels_raw), # ✅ raw IDs
         action_ids=np.array(action_ids),
-        Gamma=Gamma,
+        Gamma_tr=Gamma_tr,
         target_leaf_num=target_leaf_num,
         leaf_to_parent_map=leaf_to_parent_map,
         buff=buff
@@ -108,13 +112,17 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
 
     # Assign each train customer to estimated segment
     algo = "policy_tree" if not buff else "policy_tree-buff"
-    estimate_segment_and_assign(pop, target_leaf_num, segment_labels_pruned, x_mat, D_vec, y_vec, action_ids_pruned, algo)
+    estimate_segment_and_assign(pop, target_leaf_num, segment_labels_pruned, x_mat_tr, D_vec_tr, y_vec_tr, action_ids_pruned, algo)
 
     # assign validation customers to segments
     val_score = None
     if len(pop.val_customers) > 0:
         assign_new_customers_to_pruned_tree(tree, pop, pop.val_customers, leaf_to_pruned_segment, algo)
-        val_score = evaluate_on_validation(pop, algo=f"{algo}")
+        if buff is True:
+            Gamma_val = pop.gamma[[cust.customer_id for cust in pop.val_customers]]
+        else:
+            Gamma_val = compute_gamma_in_policy_tree_R(X_r_val, y_r_val, D_r_val, depth)
+        val_score = evaluate_on_validation(pop, algo=f"{algo}", Gamma_val=Gamma_val)
     
     # plot_segment_sankey(segment_labels, segment_labels_pruned)
     
@@ -155,14 +163,14 @@ def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segme
 import numpy as np
 from itertools import combinations
 
-def post_prune_tree(Y, D, segment_labels, action_ids, Gamma, target_leaf_num, leaf_to_parent_map, buff):
+def post_prune_tree(Y, D, segment_labels, action_ids, Gamma_tr, target_leaf_num, leaf_to_parent_map, buff):
     """
     Prune only sibling leaf segments (same parent in tree structure).
 
     Parameters:
         segment_labels: np.ndarray of segment IDs (raw R leaf IDs)
         action_ids: np.ndarray of actions per sample
-        Gamma: np.ndarray (n x A), reward matrix (A actions)
+        Gamma_tr: np.ndarray of DR scores of training samples
         target_leaf_num: desired number of leaf segments
         leaf_to_parent_map: dict {leaf_id → parent_id}, from R
         verbose: bool, print merge steps if True
@@ -206,13 +214,13 @@ def post_prune_tree(Y, D, segment_labels, action_ids, Gamma, target_leaf_num, le
             merged_idx = np.concatenate([idx1, idx2])
 
             # Choose the action that maximizes merged welfare
-            merged_node_value  = compute_node_DR_value(Y, D, Gamma, merged_idx, buff)
-            merged_node_action = np.argmax(Gamma[merged_idx].mean(axis=0))
+            merged_node_value  = compute_node_DR_value(Y, D, Gamma_tr, merged_idx, buff)
+            merged_node_action = np.argmax(Gamma_tr[merged_idx].mean(axis=0))
 
 
             # Original welfare = sum of each segment's welfare under its own action
-            w1 = compute_node_DR_value(Y, D, Gamma, idx1, buff)
-            w2 = compute_node_DR_value(Y, D, Gamma, idx2, buff)
+            w1 = compute_node_DR_value(Y, D, Gamma_tr, idx1, buff)
+            w2 = compute_node_DR_value(Y, D, Gamma_tr, idx2, buff)
             original_total = w1 + w2
 
             loss = original_total - merged_node_value

@@ -139,6 +139,6 @@ def policy_oracle(customers, algo):
     return {
         "manager_profit": manager_profit,
         "oracle_profit": oracle_profit,
-        "regret": (oracle_profit - manager_profit), # / len(customers),
-        "mistreatment_rate": mistreated # / len(customers)
+        "regret": (oracle_profit - manager_profit) / len(customers),
+        "mistreatment_rate": mistreated / len(customers)
     }

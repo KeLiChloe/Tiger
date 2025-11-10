@@ -2,9 +2,33 @@
 
 import numpy as np
 from ground_truth import SegmentEstimate, PopulationSimulator
-from utils import estimate_segment_parameters, evaluate_on_validation, compute_residual_value
+from utils import estimate_segment_parameters, evaluate_on_validation, build_design_matrix
+from sklearn.linear_model import LinearRegression
 
 import random
+
+
+
+def compute_residual_value(X, Y, D, indices):
+    # Subset the data
+    X_m = X[indices]
+    D_m = D[indices].reshape(-1, 1)
+    Y_m = Y[indices].reshape(-1, 1)
+
+    # Construct the design matrix: [intercept | X | D]
+    X_design = build_design_matrix(X_m, D_m)
+    
+    # Fit the linear model
+    model = LinearRegression(fit_intercept=False).fit(X_design, Y_m)
+    
+    # Predict
+    Y_pred = model.predict(X_design)
+
+    # Compute residuals
+    residuals = np.sum((Y_m - Y_pred) ** 2) + np.random.rand() * 1e-6  # small noise to avoid zero residuals
+
+    # return residuals / len(indices)
+    return residuals # corrected: return total residuals
 
 class MSTNode:
     def __init__(self, indices, depth=0):
@@ -17,7 +41,7 @@ class MSTNode:
         self.is_leaf = True
         self.segment_id = None            # Set after tree construction
         self.tau_hat = None
-        self.value = None                # Average profit from DR score
+        self.value = None                
     
     def prune(self):
         self.left = None
@@ -25,11 +49,10 @@ class MSTNode:
         self.is_leaf = True
 
 class MSTree:
-    def __init__(self, x, y, D, gamma, candidate_thresholds, min_leaf_size, epsilon, max_depth):
+    def __init__(self, x, y, D, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo):
         self.x = x
         self.y = y
         self.D = D
-        self.gamma = gamma
         self.H = candidate_thresholds
         self.min_leaf_size = min_leaf_size
         self.epsilon = epsilon
@@ -37,6 +60,8 @@ class MSTree:
 
         self.root = None
         self.leaf_nodes = []
+        
+        self.algo = algo
 
 
     def build(self):
@@ -52,8 +77,8 @@ class MSTree:
         """
         current_leaves = self._get_leaf_nodes()
 
-        if len(current_leaves) < M:
-            raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
+        # if len(current_leaves) < M:
+        #     raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
         
         while len(current_leaves) > M:
             max_gain = -np.inf
@@ -95,7 +120,7 @@ class MSTree:
 
             # Assign SegmentEstimate or segment_id (if lookup not needed)
             segment_obj = segment_dict[node.segment_id]
-            cust.est_segment["mst"] = segment_obj
+            cust.est_segment[f"{self.algo}"] = segment_obj
 
 
     def _grow_node(self, indices, depth):
@@ -137,10 +162,6 @@ class MSTree:
             else:
                 self.leaf_nodes.append(node)
                 return node
-        
-        # if best_gain <= self.epsilon or best_split is None: 
-        #     self.leaf_nodes.append(node) 
-        #     return node
 
         # Use best split
         node.is_leaf = False
@@ -183,15 +204,25 @@ class MSTree:
         return self._gather_nodes(node.left, is_leaf=is_leaf) + self._gather_nodes(node.right, is_leaf=is_leaf)
 
     def _compute_pruning_gain(self, node):
+        """
+        Compute the gain of pruning (i.e., merging left and right back to parent).
+        
+        Pruning gain = parent_value - (left_value + right_value)
+        
+        For MST, value = residual (lower is better).
+        If gain > 0, pruning increases residual (we lose fit quality).
+        If gain < 0, keeping the split is better (reduces residual).
+        
+        We want to prune nodes with the highest gain (least valuable splits).
+        """
         left, right = node.left, node.right
         if left is None or right is None:
             return np.inf
-        gain = (
-            compute_residual_value(self.x, self.y, self.D, node.indices) -
-            (compute_residual_value(self.x, self.y, self.D, left.indices) +
-            compute_residual_value(self.x, self.y, self.D, right.indices))
-            
-        )
+        
+        # Use cached values instead of recomputing
+        # All node values were computed during tree building
+        gain = node.value - (left.value + right.value)
+        
         return gain
 
     def _fit_segment_and_assign(self, customers, indices, data, segment_id):
@@ -201,18 +232,17 @@ class MSTree:
         est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg)
         segment = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id)
         for i in indices:
-            customers[i].est_segment["mst"] = segment
+            customers[i].est_segment[f"{self.algo}"] = segment
         return segment
 
 
-def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, min_leaf_size, epsilon, threshold_grid):
+
+def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, min_leaf_size, epsilon, threshold_grid, algo):
     # Prepare training data
     data_train = {
         "X": np.array([cust.x for cust in pop.train_customers]),
         "D": np.array([cust.D_i for cust in pop.train_customers]).reshape(-1, 1),
         "Y": np.array([cust.y for cust in pop.train_customers]).reshape(-1, 1),
-        # "Gamma": pop.gamma[[cust.customer_id for cust in pop.train_customers]]
-        "Gamma": pop._generate_gamma_matrix("reg")[[cust.customer_id for cust in pop.train_customers]],
     }
     
     
@@ -227,17 +257,17 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
         x=data_train["X"],
         y=data_train["Y"],
         D=data_train["D"],
-        gamma=data_train["Gamma"],
         candidate_thresholds=H,
         min_leaf_size=min_leaf_size,
         epsilon=epsilon,
-        max_depth=max_depth
+        max_depth=max_depth,
+        algo=algo
     )
     tree.build()
     
     # Prune to M leaves and estimate parameters
     pruned_segments = tree.prune_to_segments_and_estimate(n_segments, data_train, pop.train_customers)
-    pop.est_segments_list["mst"] = pruned_segments
+    pop.est_segments_list[f"{algo}"] = pruned_segments
     segment_dict = {seg.segment_id: seg for seg in pruned_segments}
     
     
@@ -245,7 +275,8 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
     val_score = None
     if len(pop.val_customers) > 0:
         tree.predict_segment(pop.val_customers, segment_dict)
-        val_score = evaluate_on_validation(pop, algo="mst")
+        Gamma_val = pop._generate_gamma_matrix("reg")[[cust.customer_id for cust in pop.val_customers]]
+        val_score = evaluate_on_validation(pop, algo=algo, Gamma_val=Gamma_val)
         
     return tree, val_score, segment_dict
 

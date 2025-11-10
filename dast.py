@@ -1,31 +1,44 @@
-# dast_tree.py
+"""
+DAST (Doubly-Robust Algorithm for Segmentation Trees)
+
+A decision tree algorithm for customer segmentation that maximizes implementation profit
+using doubly-robust value estimation with a variance-based fallback criterion.
+"""
 
 import numpy as np
 from ground_truth import SegmentEstimate, PopulationSimulator
 from utils import estimate_segment_parameters, evaluate_on_validation, compute_node_DR_value
 
-import random
 
 class DASTNode:
+    """Node in a DAST tree."""
+    
     def __init__(self, indices, depth=0):
-        self.indices = indices            # Indices of customers in this node
+        self.indices = indices
         self.depth = depth
+        self.value = None
+        
+        # Split info
         self.split_feature = None
         self.split_threshold = None
         self.left = None
         self.right = None
         self.is_leaf = True
-        self.segment_id = None            # Set after tree construction
-        self.tau_hat = None
-        self.value = None                # Average profit from DR score
+        
+        # Segment info (set after pruning)
+        self.segment_id = None
     
     def prune(self):
+        """Convert internal node back to leaf."""
         self.left = None
         self.right = None
         self.is_leaf = True
 
+
 class DASTree:
-    def __init__(self, x, y, D, gamma, candidate_thresholds, min_leaf_size, epsilon, max_depth):
+    """DAST decision tree for customer segmentation."""
+    
+    def __init__(self, x, y, D, gamma, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo):
         self.x = x
         self.y = y
         self.D = D
@@ -34,175 +47,414 @@ class DASTree:
         self.min_leaf_size = min_leaf_size
         self.epsilon = epsilon
         self.max_depth = max_depth
-
+        self.algo = algo
+        
         self.root = None
         self.leaf_nodes = []
+        self.debug = False
 
-
-    def build(self):
-        N = self.x.shape[0]
-        all_indices = np.arange(N)
+    def build(self, debug=False):
+        """Build the full tree by recursively growing nodes."""
+        self.debug = debug
+        all_indices = np.arange(self.x.shape[0])
+        
+        if debug:
+            print(f"\n{'='*60}")
+            print(f"🌱 Building DAST Tree (N={len(all_indices)}, max_depth={self.max_depth})")
+            print(f"{'='*60}")
+        
         self.root = self._grow_node(all_indices, depth=0)
         
-    
-    def prune_to_segments_and_estimate(self, M, data, customers):
+        if debug:
+            print(f"\n✅ Tree built! Total leaves: {len(self._get_leaf_nodes())}")
+
+    def prune_to_segments_and_estimate(self, M, data, customers, debug=False):
         """
-        Prune the tree to have exactly M leaf nodes.
-        Then fit OLS and assign SegmentEstimate to customers.
+        Prune tree to M leaves, estimate segment parameters, and assign customers.
+        Returns list of SegmentEstimate objects.
         """
         current_leaves = self._get_leaf_nodes()
-
-        if len(current_leaves) < M:
-            raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
         
+        if debug:
+            print(f"   Initial leaves: {len(current_leaves)}, Target M: {M}")
+
+        # Iteratively prune least valuable splits
         while len(current_leaves) > M:
-            max_gain = -np.inf
-            candidate_node = None
-            for node in self._get_internal_nodes_with_leaf_children():
-                gain = self._compute_pruning_gain(node)
-                if gain > max_gain:
-                    max_gain = gain
-                    candidate_node = node
-            if candidate_node:
-                candidate_node.prune()
+            prunable_nodes = self._get_internal_nodes_with_leaf_children()
+            
+            # Compute pruning gains
+            gains = [(node, self._compute_pruning_gain(node)) for node in prunable_nodes]
+            max_gain = max(g for _, g in gains)
+            
+            # Find all nodes with max gain (potential ties)
+            candidates = [node for node, g in gains if g == max_gain]
+            
+            # Tie-breaking: if multiple nodes have same gain, use X variance
+            if len(candidates) > 1:
+                # Select node that minimizes within-cluster X variance increase
+                best_node = min(candidates, key=self._compute_variance_after_pruning)
+                if debug:
+                    print(f"   Pruning node (gain={max_gain:.4f}, tie-break by X variance), leaves: {len(current_leaves)} → {len(current_leaves)-1}")
+            else:
+                best_node = candidates[0]
+                if debug:
+                    print(f"   Pruning node (gain={max_gain:.4f}), leaves: {len(current_leaves)} → {len(current_leaves)-1}")
+            
+            best_node.prune()
             current_leaves = self._get_leaf_nodes()
 
         self.leaf_nodes = current_leaves
+        
+        # Assign segment IDs
         for i, node in enumerate(self.leaf_nodes):
             node.segment_id = i
-
-        final_segments = []
-        for node in self.leaf_nodes:
-            segment = self._fit_segment_and_assign(customers, node.indices, data, node.segment_id)
-            final_segments.append(segment)
-        return final_segments
+        
+        # Estimate parameters for each segment
+        segments = [
+            self._fit_segment_and_assign(customers, node.indices, data, node.segment_id)
+            for node in self.leaf_nodes
+        ]
+        
+        if debug:
+            print(f"   Final leaves: {len(self.leaf_nodes)}")
+            print(f"   Segment details:")
+            for i, (seg, node) in enumerate(zip(segments, self.leaf_nodes)):
+                print(f"     Seg{i}: N={len(node.indices)}, tau={seg.est_tau:+7.2f}, action={seg.est_action}")
+        
+        return segments
 
     def predict_segment(self, customers, segment_dict):
-        """
-        Predicts and assigns segment IDs for a list of new Customer objects based on their covariates.
-
-        Args:
-            customers: list of Customer objects
-        """
+        """Assign segment to each customer by traversing the tree."""
         for cust in customers:
-            xi = cust.x
             node = self.root
             while not node.is_leaf:
-                if xi[node.split_feature] <= node.split_threshold:
+                if cust.x[node.split_feature] <= node.split_threshold:
                     node = node.left
                 else:
                     node = node.right
+            cust.est_segment[self.algo] = segment_dict[node.segment_id]
 
-            # Assign SegmentEstimate or segment_id (if lookup not needed)
-            segment_obj = segment_dict[node.segment_id]
-            cust.est_segment["dast"] = segment_obj
-        
-
-
+    # ============================================================
+    # Growing: Build tree recursively
+    # ============================================================
+    
     def _grow_node(self, indices, depth):
+        """Recursively grow tree by finding best split at each node."""
         node = DASTNode(indices, depth)
         node.value = compute_node_DR_value(self.y, self.D, self.gamma, indices, buff=True)
-
+        
+        if self.debug:
+            self._debug_print_node_info(node, indices)
+        
+        # Stop if max depth reached
         if depth == self.max_depth:
+            if self.debug:
+                print(f"{'  '*depth}  ⛔ Max depth reached → Leaf")
             self.leaf_nodes.append(node)
             return node
-        best_gain = -np.inf
-        best_split = None
-        valid_splits = []
-
+        
+        # Evaluate all candidate splits
+        gain_splits, var_splits = self._evaluate_all_splits(node, indices)
+        
+        # Select best split using dual criterion
+        final_split, criterion_used = self._select_best_split(gain_splits, var_splits, node.value)
+        
+        if self.debug:
+            self._debug_print_split_info(depth, gain_splits, var_splits, final_split, criterion_used)
+        
+        # No valid split found -> leaf
+        if final_split is None:
+            self.leaf_nodes.append(node)
+            return node
+        
+        # Execute split
+        node.is_leaf = False
+        node.split_feature, node.split_threshold, left_idx, right_idx = final_split
+        node.left = self._grow_node(left_idx, depth + 1)
+        node.right = self._grow_node(right_idx, depth + 1)
+        
+        return node
+    
+    def _evaluate_all_splits(self, node, indices):
+        """
+        Evaluate all candidate splits and return two lists:
+        - gain_splits: [(gain, feature, threshold, left_idx, right_idx), ...]
+        - var_splits: [(var_reduction, feature, threshold, left_idx, right_idx), ...]
+        """
+        gain_splits = []
+        var_splits = []
+        
         for j in range(self.x.shape[1]):
             for t in self.H[j]:
                 left_idx = indices[self.x[indices, j] <= t]
                 right_idx = indices[self.x[indices, j] > t]
-
-                if self._check_leaf_constraints(left_idx) and self._check_leaf_constraints(right_idx):
-                    left_val = compute_node_DR_value(self.y, self.D, self.gamma, left_idx, buff=True)
-                    right_val = compute_node_DR_value(self.y, self.D, self.gamma, right_idx, buff=True)
-                    gain = left_val + right_val - node.value
-                    valid_splits.append((gain, j, t, left_idx, right_idx))
-
-                    if gain >= best_gain:
-                        best_gain = gain
-                        best_split = (j, t, left_idx, right_idx)
-
-        # If no good split found, fallback to random valid split (if any)
-        if best_split is None:
-            if valid_splits:
-                _, j_rand, t_rand, left_idx, right_idx = random.choice(valid_splits)
-                node.is_leaf = False
-                node.split_feature = j_rand
-                node.split_threshold = t_rand
-                node.left = self._grow_node(left_idx, depth + 1)
-                node.right = self._grow_node(right_idx, depth + 1)
-                return node
-            else:
-                self.leaf_nodes.append(node)
-                return node
-
-        # Use best split
-        node.is_leaf = False
-        node.split_feature, node.split_threshold, left_idx, right_idx = best_split
-        node.left = self._grow_node(left_idx, depth + 1)
-        node.right = self._grow_node(right_idx, depth + 1)
-        return node
-
+                
+                # Check minimum leaf size constraints
+                if not (self._check_leaf_constraints(left_idx) and self._check_leaf_constraints(right_idx)):
+                    continue
+                
+                # Criterion 1: Gain (profit improvement)
+                left_val = compute_node_DR_value(self.y, self.D, self.gamma, left_idx, buff=True)
+                right_val = compute_node_DR_value(self.y, self.D, self.gamma, right_idx, buff=True)
+                gain = left_val + right_val - node.value
+                gain_splits.append((gain, j, t, left_idx, right_idx))
+                
+                # Criterion 2: Variance reduction (covariate homogeneity)
+                var_reduction = self._compute_variance_reduction(indices, left_idx, right_idx)
+                var_splits.append((var_reduction, j, t, left_idx, right_idx))
+        
+        return gain_splits, var_splits
+    
+    def _select_best_split(self, gain_splits, var_splits, node_value):
+        """
+        Select best split using dual criterion:
+        1. Primary: gain > epsilon + tolerance -> use gain-based split
+        2. Fallback: gain <= epsilon + tolerance -> use variance-based split (if positive reduction)
+        
+        Returns: (split_tuple, criterion_name) or (None, None)
+        """
+        if not gain_splits:
+            return None, None
+        
+        # Try gain-based criterion first
+        best_gain_split = max(gain_splits, key=lambda x: x[0])
+        best_gain = best_gain_split[0]
+        
+        # Use tolerance to handle floating point precision issues
+        tolerance = 1e-6
+        
+        if best_gain > self.epsilon + tolerance:
+            feature, threshold, left_idx, right_idx = best_gain_split[1:]
+            return (feature, threshold, left_idx, right_idx), "gain"
+        
+        # Fallback to variance-based criterion
+        if var_splits:
+            best_var_split = max(var_splits, key=lambda x: x[0])
+            best_var_reduction = best_var_split[0]
+            
+            if best_var_reduction > 0:
+                feature, threshold, left_idx, right_idx = best_var_split[1:]
+                return (feature, threshold, left_idx, right_idx), "variance"
+        
+        return None, None
+    
+    def _compute_variance_reduction(self, parent_idx, left_idx, right_idx):
+        """
+        Compute reduction in covariate variance from splitting.
+        Higher variance = more heterogeneous customers = potentially different tau.
+        """
+        parent_var = self._compute_covariate_variance(parent_idx)
+        left_var = self._compute_covariate_variance(left_idx)
+        right_var = self._compute_covariate_variance(right_idx)
+        
+        n_parent = len(parent_idx)
+        if n_parent == 0:
+            return 0.0
+        
+        # Weighted average of child variances
+        weight_left = len(left_idx) / n_parent
+        weight_right = len(right_idx) / n_parent
+        weighted_child_var = weight_left * left_var + weight_right * right_var
+        
+        return parent_var - weighted_child_var
+    
+    def _compute_covariate_variance(self, indices):
+        """Compute total variance of covariates as heterogeneity measure."""
+        if len(indices) < 2:
+            return 0.0
+        return np.var(self.x[indices], axis=0, ddof=1).sum()
     
     def _check_leaf_constraints(self, indices):
+        """Check if leaf has minimum required samples for each treatment."""
         D_sub = self.D[indices]
-        n1 = np.sum(D_sub == 1)
-        n0 = np.sum(D_sub == 0)
-        return (n1 >= self.min_leaf_size) and (n0 >= self.min_leaf_size)
+        n_treated = np.sum(D_sub == 1)
+        n_control = np.sum(D_sub == 0)
+        return n_treated >= self.min_leaf_size and n_control >= self.min_leaf_size
 
+    # ============================================================
+    # Pruning: Select M most valuable splits
+    # ============================================================
     
-    def _get_leaf_nodes(self):
-        return self._gather_nodes(self.root, is_leaf=True)
-
-    def _get_internal_nodes_with_leaf_children(self):
-        def condition(node):
-            return (
-                not node.is_leaf and 
-                node.left and node.right and 
-                node.left.is_leaf and node.right.is_leaf
-            )
-        return self._gather_nodes(self.root, condition=condition)
-
-    def _gather_nodes(self, node, is_leaf=False, condition=None):
-        if node is None:
-            return []
-        if condition:
-            return (
-                [node] if condition(node) else []
-            ) + self._gather_nodes(node.left, condition=condition) + self._gather_nodes(node.right, condition=condition)
-        if is_leaf and node.is_leaf:
-            return [node]
-        if not is_leaf and not node.is_leaf:
-            return [node]
-        return self._gather_nodes(node.left, is_leaf=is_leaf) + self._gather_nodes(node.right, is_leaf=is_leaf)
-
     def _compute_pruning_gain(self, node):
-        left, right = node.left, node.right
-        if left is None or right is None:
+        """
+        Compute gain from pruning node (higher = less valuable split).
+        Pruning gain = parent_value - (left_value + right_value)
+        """
+        if node.left is None or node.right is None:
             return np.inf
-        gain = (
-            compute_node_DR_value(self.y, self.D, self.gamma, node.indices, buff=True) -
-            (compute_node_DR_value(self.y, self.D, self.gamma, left.indices, buff=True) +
-            compute_node_DR_value(self.y, self.D, self.gamma, right.indices, buff=True))
-            
-        )
-        return gain
+        return node.value - (node.left.value + node.right.value)
+    
+    def _compute_variance_after_pruning(self, node):
+        """
+        Compute within-cluster X variance increase if this node is pruned.
+        
+        Used for tie-breaking when multiple nodes have same pruning gain.
+        Lower variance increase = better (more homogeneous clusters).
+        
+        Returns:
+            float: Weighted average X variance after pruning
+        """
+        if node.left is None or node.right is None:
+            return np.inf
+        
+        # Get indices for merged cluster (after pruning)
+        merged_indices = node.indices
+        
+        # Get indices for left and right clusters (before pruning)
+        left_indices = node.left.indices
+        right_indices = node.right.indices
+        
+        # Compute X variance for merged cluster
+        if len(merged_indices) < 2:
+            merged_var = 0.0
+        else:
+            X_merged = self.x[merged_indices]
+            merged_var = np.var(X_merged, axis=0, ddof=1).sum()
+        
+        # Compute weighted X variance for left and right clusters
+        if len(left_indices) < 2:
+            left_var = 0.0
+        else:
+            X_left = self.x[left_indices]
+            left_var = np.var(X_left, axis=0, ddof=1).sum()
+        
+        if len(right_indices) < 2:
+            right_var = 0.0
+        else:
+            X_right = self.x[right_indices]
+            right_var = np.var(X_right, axis=0, ddof=1).sum()
+        
+        # Weighted average variance before pruning
+        n_total = len(merged_indices)
+        n_left = len(left_indices)
+        n_right = len(right_indices)
+        
+        weighted_var_before = (n_left * left_var + n_right * right_var) / n_total
+        
+        # Variance increase from pruning
+        variance_increase = merged_var - weighted_var_before
+        
+        return variance_increase
 
+    # ============================================================
+    # Parameter Estimation
+    # ============================================================
+    
     def _fit_segment_and_assign(self, customers, indices, data, segment_id):
+        """Estimate segment parameters using OLS and assign to customers."""
         X_seg = data['X'][indices]
         D_seg = data['D'][indices]
         Y_seg = data['Y'][indices]
+        
         est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg)
         segment = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id)
+        
         for i in indices:
-            customers[i].est_segment["dast"] = segment
+            customers[i].est_segment[self.algo] = segment
+        
         return segment
 
+    # ============================================================
+    # Tree Traversal Utilities
+    # ============================================================
+    
+    def _get_leaf_nodes(self):
+        """Return all leaf nodes in tree."""
+        return self._gather_nodes(self.root, lambda n: n.is_leaf)
+    
+    def _get_internal_nodes_with_leaf_children(self):
+        """Return internal nodes where both children are leaves."""
+        def condition(n):
+            return not n.is_leaf and n.left and n.right and n.left.is_leaf and n.right.is_leaf
+        return self._gather_nodes(self.root, condition)
+    
+    def _gather_nodes(self, node, condition):
+        """Recursively collect nodes matching condition."""
+        if node is None:
+            return []
+        
+        result = [node] if condition(node) else []
+        result += self._gather_nodes(node.left, condition)
+        result += self._gather_nodes(node.right, condition)
+        
+        return result
 
-def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, min_leaf_size, epsilon, threshold_grid):
+    # ============================================================
+    # Debug Utilities
+    # ============================================================
+    
+    def _debug_print_node_info(self, node, indices):
+        """Print node information for debugging."""
+        depth = node.depth
+        D_node = self.D[indices]
+        Y_node = self.y[indices]
+        n_treated = np.sum(D_node == 1)
+        n_control = np.sum(D_node == 0)
+        
+        if n_treated > 0 and n_control > 0:
+            tau_hat = np.mean(Y_node[D_node == 1]) - np.mean(Y_node[D_node == 0])
+            est_action = int(tau_hat >= 0)
+            print(f"\n{'  '*depth}📍 Depth {depth}: N={len(indices)}, Value={node.value:.4f}, "
+                  f"tau_hat={tau_hat:.4f}, est_action={est_action}")
+        else:
+            print(f"\n{'  '*depth}📍 Depth {depth}: N={len(indices)}, Value={node.value:.4f}, "
+                  f"[insufficient data]")
+    
+    def _debug_print_split_info(self, depth, gain_splits, var_splits, final_split, criterion):
+        """Print split evaluation information for debugging."""
+        indent = '  ' * depth
+        total_candidates = len(self.H[0]) * self.x.shape[1]
+        
+        print(f"{indent}  🔍 Total candidate splits: {total_candidates}")
+        print(f"{indent}  ✓ Valid splits (pass min_leaf_size): {len(gain_splits)}")
+        
+        if not gain_splits:
+            print(f"{indent}  ❌ No valid splits (all violate min_leaf_size={self.min_leaf_size})")
+            return
+        
+        # Print gain criterion
+        best_gain = max(gain_splits, key=lambda x: x[0])[0]
+        print(f"{indent}  📊 Gain criterion: best_gain={best_gain:.4f} (threshold={self.epsilon:.4f})")
+        top_gains = sorted(gain_splits, key=lambda x: x[0], reverse=True)[:3]
+        for rank, (g, j, t, _, _) in enumerate(top_gains, 1):
+            print(f"{indent}     #{rank}: gain={g:.4f}, feature={j}, threshold={t:.4f}")
+        
+        # Print variance criterion
+        if var_splits:
+            best_var = max(var_splits, key=lambda x: x[0])[0]
+            print(f"{indent}  📊 Variance criterion: best_var_reduction={best_var:.4f}")
+            top_vars = sorted(var_splits, key=lambda x: x[0], reverse=True)[:3]
+            for rank, (v, j, t, _, _) in enumerate(top_vars, 1):
+                print(f"{indent}     #{rank}: var_reduction={v:.4f}, feature={j}, threshold={t:.4f}")
+        
+        # Print decision
+        if final_split is None:
+            best_gain = max(gain_splits, key=lambda x: x[0])[0] if gain_splits else -np.inf
+            best_var = max(var_splits, key=lambda x: x[0])[0] if var_splits else -np.inf
+            reason = "No valid splits" if not gain_splits else f"Both criteria failed (gain={best_gain:.4f}, var={best_var:.4f})"
+            print(f"{indent}  🍃 → Leaf ({reason})")
+        else:
+            feature, threshold, left_idx, right_idx = final_split
+            criterion_name = "GAIN-based" if criterion == "gain" else "VARIANCE-based (fallback)"
+            print(f"{indent}  ✅ Using {criterion_name} split")
+            print(f"{indent}  ✂️  Split on X[{feature}] <= {threshold:.4f} (criterion={criterion})")
+            print(f"{indent}     Left: {len(left_idx)}, Right: {len(right_idx)}")
+
+
+# ============================================================
+# Main Interface Function
+# ============================================================
+
+def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, 
+                               min_leaf_size, epsilon, algo, debug=False):
+    """
+    Main interface for DAST algorithm.
+    
+    Returns:
+        tree: Trained DASTree object
+        val_score: Validation score (average DR value)
+        segment_dict: Dictionary mapping segment_id to SegmentEstimate
+    """
     # Prepare training data
     data_train = {
         "X": np.array([cust.x for cust in pop.train_customers]),
@@ -211,13 +463,21 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, m
         "Gamma": pop.gamma[[cust.customer_id for cust in pop.train_customers]]
     }
     
-    # candidate thresholds for each feature
-    H = {
-        j: np.linspace(data_train["X"][:, j].min()-2, data_train["X"][:, j].max()+2, threshold_grid)
-        for j in range(data_train["X"].shape[1])
-    }
+    # Generate candidate thresholds (midpoints between unique values)
+    H = {}
+    for j in range(data_train["X"].shape[1]):
+        sorted_values = np.sort(np.unique(data_train["X"][:, j]))
+        if len(sorted_values) > 1:
+            H[j] = (sorted_values[:-1] + sorted_values[1:]) / 2.0
+        else:
+            H[j] = sorted_values
     
-    # Build DAST
+    if debug:
+        print(f"\n📋 Candidate thresholds per feature:")
+        for j in range(len(H)):
+            print(f"   Feature {j}: {len(H[j])} thresholds (min={H[j].min():.2f}, max={H[j].max():.2f})")
+    
+    # Build tree
     tree = DASTree(
         x=data_train["X"],
         y=data_train["Y"],
@@ -226,22 +486,26 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, m
         candidate_thresholds=H,
         min_leaf_size=min_leaf_size,
         epsilon=epsilon,
-        max_depth=max_depth
+        max_depth=max_depth,
+        algo=algo
     )
-    tree.build()
+    tree.build(debug=debug)
     
-    # Prune to M leaves and estimate parameters
-    pruned_segments = tree.prune_to_segments_and_estimate(n_segments, data_train, pop.train_customers)
-    pop.est_segments_list["dast"] = pruned_segments
+    # Prune and estimate
+    if debug:
+        print(f"\n🔪 Pruning to M={n_segments} segments...")
+    
+    pruned_segments = tree.prune_to_segments_and_estimate(n_segments, data_train, pop.train_customers, debug=debug)
+    pop.est_segments_list[algo] = pruned_segments
     segment_dict = {seg.segment_id: seg for seg in pruned_segments}
     
-    
-    # Assign each validate customer to estimated segment
+    # Validation
     val_score = None
     if len(pop.val_customers) > 0:
         tree.predict_segment(pop.val_customers, segment_dict)
-        val_score = evaluate_on_validation(pop, algo="dast")
-        
+        Gamma_val = pop.gamma[[cust.customer_id for cust in pop.val_customers]]
+        val_score = evaluate_on_validation(pop, algo=algo, Gamma_val=Gamma_val)
+        if debug:
+            print(f"✅ Validation score: {val_score:.4f}")
+    
     return tree, val_score, segment_dict
-
-
