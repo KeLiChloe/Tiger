@@ -52,6 +52,10 @@ class DASTree:
         self.root = None
         self.leaf_nodes = []
         self.debug = False
+        
+        # Tolerance values for floating point comparisons
+        self.tolerance_gain = 1e-3  # For gain comparisons in splitting
+        self.tolerance_pruning = 1e-5  # For pruning gain comparisons
 
     def build(self, debug=False):
         """Build the full tree by recursively growing nodes."""
@@ -79,15 +83,15 @@ class DASTree:
             print(f"   Initial leaves: {len(current_leaves)}, Target M: {M}")
 
         # Iteratively prune least valuable splits
+        if len(current_leaves) < M:
+            raise ValueError(f"Current leaves ({len(current_leaves)}) are already less than or equal to M ({M}). No pruning needed.")
         while len(current_leaves) > M:
             prunable_nodes = self._get_internal_nodes_with_leaf_children()
             
             # Compute pruning gains
             gains = [(node, self._compute_pruning_gain(node)) for node in prunable_nodes]
             max_gain = max(g for _, g in gains)
-            
-            # Find all nodes with max gain (potential ties)
-            candidates = [node for node, g in gains if g == max_gain]
+            candidates = [node for node, g in gains if abs(g - max_gain) < self.tolerance_pruning]
             
             # Tie-breaking: if multiple nodes have same gain, use X variance
             if len(candidates) > 1:
@@ -208,35 +212,98 @@ class DASTree:
     def _select_best_split(self, gain_splits, var_splits, node_value):
         """
         Select best split using dual criterion:
-        1. Primary: gain > epsilon + tolerance -> use gain-based split
-        2. Fallback: gain <= epsilon + tolerance -> use variance-based split (if positive reduction)
+        1. Primary: gain > epsilon -> use gain-based split
+        2. Fallback: gain <= epsilon -> use variance-based split (if positive reduction)
+        
+        Tie-breaking: When multiple splits have the same maximum gain (tie),
+        use variance reduction to break the tie.
         
         Returns: (split_tuple, criterion_name) or (None, None)
         """
         if not gain_splits:
             return None, None
         
-        # Try gain-based criterion first
-        best_gain_split = max(gain_splits, key=lambda x: x[0])
-        best_gain = best_gain_split[0]
+        # Find maximum gain
+        max_gain = max(gain_splits, key=lambda x: x[0])[0]
         
-        # Use tolerance to handle floating point precision issues
-        tolerance = 1e-6
-        
-        if best_gain > self.epsilon + tolerance:
-            feature, threshold, left_idx, right_idx = best_gain_split[1:]
-            return (feature, threshold, left_idx, right_idx), "gain"
-        
-        # Fallback to variance-based criterion
-        if var_splits:
-            best_var_split = max(var_splits, key=lambda x: x[0])
-            best_var_reduction = best_var_split[0]
+        # Check if we should use gain-based criterion
+        if max_gain + self.tolerance_gain > self.epsilon:
+            # Find all splits with maximum gain (tie detection)
+            tied_indices = [idx for idx, (g, _, _, _, _) in enumerate(gain_splits) 
+                          if abs(g - max_gain) <= self.tolerance_gain]
             
-            if best_var_reduction > 0:
-                feature, threshold, left_idx, right_idx = best_var_split[1:]
-                return (feature, threshold, left_idx, right_idx), "variance"
+            if len(tied_indices) == 1:
+                # No tie: use the only candidate directly
+                _, feature, threshold, left_idx, right_idx = gain_splits[tied_indices[0]]
+                return (feature, threshold, left_idx, right_idx), "gain"
+            else:
+                # Tie: use variance reduction to break the tie
+                # Since gain_splits and var_splits are generated in the same order,
+                # we can use indices to find corresponding variance reductions
+                tied_with_var = [(var_splits[idx][0], gain_splits[idx][1], gain_splits[idx][2], 
+                                 gain_splits[idx][3], gain_splits[idx][4])
+                                for idx in tied_indices if idx < len(var_splits)]
+                
+                if tied_with_var:
+                    # Select candidate with maximum variance reduction, with stable tie-breaking
+                    best_split = self._select_with_tie_breaking(
+                        tied_with_var, key_func=lambda x: x[0], reverse=True)
+                    _, feature, threshold, left_idx, right_idx = best_split
+                    return (feature, threshold, left_idx, right_idx), "gain-variance"
+        
+        # Fallback to variance-based criterion if gain <= epsilon
+        if var_splits:
+            max_var_reduction = max(var_splits, key=lambda x: x[0])[0]
+            
+            if max_var_reduction > 0:
+                # Find all splits with maximum variance reduction
+                var_candidates = [(vr, j, t, left_idx, right_idx)
+                                for vr, j, t, left_idx, right_idx in var_splits
+                                if abs(vr - max_var_reduction) <= self.tolerance_gain]
+                
+                if var_candidates:
+                    # Select with stable tie-breaking (threshold, feature)
+                    best_split = self._select_with_tie_breaking(
+                        var_candidates, key_func=lambda x: x[0], reverse=True)
+                    _, feature, threshold, left_idx, right_idx = best_split
+                    return (feature, threshold, left_idx, right_idx), "variance"
         
         return None, None
+    
+    def _select_with_tie_breaking(self, candidates, key_func, reverse=False, tolerance=None):
+        """
+        Select best candidate with stable tie-breaking.
+        
+        Args:
+            candidates: List of candidate tuples
+            key_func: Function to extract comparison key from candidate
+            reverse: If True, select maximum; if False, select minimum
+            tolerance: Tolerance for tie detection (default: self.tolerance_gain)
+        
+        Returns:
+            Best candidate tuple
+        """
+        if tolerance is None:
+            tolerance = self.tolerance_gain
+        
+        if not candidates:
+            return None
+        
+        # Find best value
+        best_val = max(candidates, key=key_func) if reverse else min(candidates, key=key_func)
+        best_val = key_func(best_val)
+        
+        # Find all candidates with best value (within tolerance)
+        tied_candidates = [c for c in candidates 
+                          if abs(key_func(c) - best_val) <= tolerance]
+        
+        # Stable tie-breaking: sort by (threshold, feature) for splits
+        # Assumes format: (value, feature, threshold, ...)
+        if len(tied_candidates) > 1 and len(tied_candidates[0]) >= 3:
+            tied_candidates_sorted = sorted(tied_candidates, key=lambda x: (x[2], x[1]))  # threshold, then feature
+            return tied_candidates_sorted[0]
+        else:
+            return tied_candidates[0]
     
     def _compute_variance_reduction(self, parent_idx, left_idx, right_idx):
         """
@@ -292,49 +359,31 @@ class DASTree:
         Lower variance increase = better (more homogeneous clusters).
         
         Returns:
-            float: Weighted average X variance after pruning
+            float: Variance increase from pruning
         """
         if node.left is None or node.right is None:
             return np.inf
         
-        # Get indices for merged cluster (after pruning)
+        # Get indices for merged cluster (after pruning) and child clusters (before pruning)
         merged_indices = node.indices
-        
-        # Get indices for left and right clusters (before pruning)
         left_indices = node.left.indices
         right_indices = node.right.indices
         
-        # Compute X variance for merged cluster
-        if len(merged_indices) < 2:
-            merged_var = 0.0
-        else:
-            X_merged = self.x[merged_indices]
-            merged_var = np.var(X_merged, axis=0, ddof=1).sum()
-        
-        # Compute weighted X variance for left and right clusters
-        if len(left_indices) < 2:
-            left_var = 0.0
-        else:
-            X_left = self.x[left_indices]
-            left_var = np.var(X_left, axis=0, ddof=1).sum()
-        
-        if len(right_indices) < 2:
-            right_var = 0.0
-        else:
-            X_right = self.x[right_indices]
-            right_var = np.var(X_right, axis=0, ddof=1).sum()
+        # Compute variances using helper method
+        merged_var = self._compute_covariate_variance(merged_indices)
+        left_var = self._compute_covariate_variance(left_indices)
+        right_var = self._compute_covariate_variance(right_indices)
         
         # Weighted average variance before pruning
         n_total = len(merged_indices)
+        if n_total == 0:
+            return np.inf
         n_left = len(left_indices)
         n_right = len(right_indices)
-        
         weighted_var_before = (n_left * left_var + n_right * right_var) / n_total
         
         # Variance increase from pruning
-        variance_increase = merged_var - weighted_var_before
-        
-        return variance_increase
+        return merged_var - weighted_var_before
 
     # ============================================================
     # Parameter Estimation
@@ -414,7 +463,7 @@ class DASTree:
         
         # Print gain criterion
         best_gain = max(gain_splits, key=lambda x: x[0])[0]
-        print(f"{indent}  📊 Gain criterion: best_gain={best_gain:.4f} (threshold={self.epsilon:.4f})")
+        print(f"{indent}  📊 Gain criterion: best_gain={best_gain:.4f}")
         top_gains = sorted(gain_splits, key=lambda x: x[0], reverse=True)[:3]
         for rank, (g, j, t, _, _) in enumerate(top_gains, 1):
             print(f"{indent}     #{rank}: gain={g:.4f}, feature={j}, threshold={t:.4f}")
@@ -435,7 +484,12 @@ class DASTree:
             print(f"{indent}  🍃 → Leaf ({reason})")
         else:
             feature, threshold, left_idx, right_idx = final_split
-            criterion_name = "GAIN-based" if criterion == "gain" else "VARIANCE-based (fallback)"
+            criterion_map = {
+                "gain": "GAIN-based",
+                "gain-variance": "GAIN-based (tie broken by variance)",
+                "variance": "VARIANCE-based (fallback)"
+            }
+            criterion_name = criterion_map.get(criterion, criterion.upper())
             print(f"{indent}  ✅ Using {criterion_name} split")
             print(f"{indent}  ✂️  Split on X[{feature}] <= {threshold:.4f} (criterion={criterion})")
             print(f"{indent}     Left: {len(left_idx)}, Right: {len(right_idx)}")
@@ -472,10 +526,6 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth,
         else:
             H[j] = sorted_values
     
-    if debug:
-        print(f"\n📋 Candidate thresholds per feature:")
-        for j in range(len(H)):
-            print(f"   Feature {j}: {len(H[j])} thresholds (min={H[j].min():.2f}, max={H[j].max():.2f})")
     
     # Build tree
     tree = DASTree(

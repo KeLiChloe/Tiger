@@ -116,7 +116,7 @@ class PopulationSimulator:
         print(f"Computed X_covariate_noise: {self.signal_covariate_noise:.4f} (scale={X_noise_std_scale}, avg_distance={avg_distance:.4f})")
         
         # NOW adjust tau for adjacent clusters (after signal_covariate_noise is set)
-        # self._adjust_adjacent_cluster_tau()
+        self._adjust_adjacent_cluster_tau()
         
         # Compute noise_std based on Y_noise_std_scale (required parameter)
         if Y_noise_std_scale is None:
@@ -194,65 +194,65 @@ class PopulationSimulator:
         
         return true_segments
     
-    # def _adjust_adjacent_cluster_tau(self):
-    #     """
-    #     Make sure "adjacent but not overlapping" clusters have opposite treatment effect signs.
-    #     Adjacent means: distance ≈ 1-3 sigma (touching at boundaries, not fully overlapping).
-    #     This creates a challenging scenario for algorithms.
-    #     """
-    #     if self.K < 2:
-    #         return
+    def _adjust_adjacent_cluster_tau(self):
+        """
+        Make sure "adjacent but not overlapping" clusters have opposite treatment effect signs.
+        Adjacent means: distance ≈ 1-3 sigma (touching at boundaries, not fully overlapping).
+        This creates a challenging scenario for algorithms.
+        """
+        if self.K < 2:
+            return
         
-    #     # Extract mean vectors (only signal dimensions matter for clustering)
-    #     mean_vectors_signal = np.array([seg.x_mean[:self.signal_d] for seg in self.true_segments])
+        # Extract mean vectors (only signal dimensions matter for clustering)
+        mean_vectors_signal = np.array([seg.x_mean[:self.signal_d] for seg in self.true_segments])
         
-    #     # Compute pairwise distances in signal space
-    #     dist_matrix = squareform(pdist(mean_vectors_signal, metric='euclidean'))
+        # Compute pairwise distances in signal space
+        dist_matrix = squareform(pdist(mean_vectors_signal, metric='euclidean'))
         
-    #     # Set diagonal to infinity to exclude self-distances
-    #     np.fill_diagonal(dist_matrix, np.inf)
+        # Set diagonal to infinity to exclude self-distances
+        np.fill_diagonal(dist_matrix, np.inf)
         
-    #     # Define "adjacent" as distance in range [lower_bound, upper_bound]
-    #     # This means clusters touch at boundaries but don't heavily overlap
-    #     sigma = self.signal_covariate_noise
-    #     lower_bound = 1.0 * sigma  # Closer than this = too much overlap
-    #     upper_bound = 4.0 * sigma  # Farther than this = well separated
+        # Define "adjacent" as distance in range [lower_bound, upper_bound]
+        # This means clusters touch at boundaries but don't heavily overlap
+        sigma = self.signal_covariate_noise
+        lower_bound = 1.0 * sigma  # Closer than this = too much overlap
+        upper_bound = 4.0 * sigma  # Farther than this = well separated
         
-    #     # Find pairs in the "adjacent" range
-    #     adjacent_pairs = []
-    #     for i in range(self.K):
-    #         for j in range(i+1, self.K):
-    #             dist = dist_matrix[i, j]
-    #             if lower_bound <= dist <= upper_bound:
-    #                 adjacent_pairs.append((i, j, dist))
+        # Find pairs in the "adjacent" range
+        adjacent_pairs = []
+        for i in range(self.K):
+            for j in range(i+1, self.K):
+                dist = dist_matrix[i, j]
+                if lower_bound <= dist <= upper_bound:
+                    adjacent_pairs.append((i, j, dist))
         
-    #     if adjacent_pairs:
-    #         # Pick the pair with distance closest to 2*sigma (sweet spot for "touching")
-    #         target_dist = 2.0 * sigma
-    #         best_pair = min(adjacent_pairs, key=lambda x: abs(x[2] - target_dist))
-    #         idx1, idx2, dist = best_pair
+        if adjacent_pairs:
+            # Pick the pair with distance closest to 2*sigma (sweet spot for "touching")
+            target_dist = 2.0 * sigma
+            best_pair = min(adjacent_pairs, key=lambda x: abs(x[2] - target_dist))
+            idx1, idx2, dist = best_pair
             
-    #         tau1 = self.true_segments[idx1].tau
-    #         tau2 = self.true_segments[idx2].tau
-    #         action1_before = self.true_segments[idx1].action
-    #         action2_before = self.true_segments[idx2].action
+            tau1 = self.true_segments[idx1].tau
+            tau2 = self.true_segments[idx2].tau
+            action1_before = self.true_segments[idx1].action
+            action2_before = self.true_segments[idx2].action
             
-    #         # If they have the same sign, flip one of them
-    #         if tau1 * tau2 > 0:  # Same sign (both positive or both negative)
-    #             # Flip the sign of tau2
-    #             self.true_segments[idx2].tau = -tau2
-    #             self.true_segments[idx2].action = int(self.true_segments[idx2].tau >= 0)
+            # If they have the same sign, flip one of them
+            if tau1 * tau2 > 0:  # Same sign (both positive or both negative)
+                # Flip the sign of tau2
+                self.true_segments[idx2].tau = -tau2
+                self.true_segments[idx2].action = int(self.true_segments[idx2].tau >= 0)
                 
-    #             action2_after = self.true_segments[idx2].action
+                action2_after = self.true_segments[idx2].action
                 
-    #             print(f"⚠️  Adjacent clusters (segments {idx1} and {idx2}) had same tau sign.")
-    #             print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
-    #             print(f"   BEFORE flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={tau2:+7.2f} action={action2_before}")
-    #             print(f"   AFTER  flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={-tau2:+7.2f} action={action2_after}")
-    #         else:
-    #             print(f"✓ Adjacent clusters (segments {idx1} and {idx2}) already have opposite tau signs.")
-    #             print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
-    #             print(f"   Seg{idx1}: tau={tau1:+7.2f}, Seg{idx2}: tau={tau2:+7.2f}")
+                print(f"⚠️  Adjacent clusters (segments {idx1} and {idx2}) had same tau sign.")
+                print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
+                print(f"   BEFORE flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={tau2:+7.2f} action={action2_before}")
+                print(f"   AFTER  flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={-tau2:+7.2f} action={action2_after}")
+            else:
+                print(f"✓ Adjacent clusters (segments {idx1} and {idx2}) already have opposite tau signs.")
+                print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
+                print(f"   Seg{idx1}: tau={tau1:+7.2f}, Seg{idx2}: tau={tau2:+7.2f}")
 
     def _generate_pilot_customers(self):
         pilot_customers = []
@@ -555,25 +555,47 @@ class PopulationSimulator:
 
         
         if method == "mlp":
+            # CRITICAL: Set numpy random seed before MLP training to ensure reproducibility
+            # MLP training can be affected by numpy's global random state, even with random_state parameter
+            original_state = np.random.get_state()
+            np.random.seed(42)
             
-            model_0 = MLPRegressor(
-                hidden_layer_sizes=(64, 32),
-                activation='relu',
-                max_iter=10000,
-                random_state=42
-            )
-            model_1 = MLPRegressor(
-                hidden_layer_sizes=(64, 32),
-                activation='relu',
-                max_iter=10000,
-                random_state=42
-            )
-            
-            model_0.fit(X0, Y0)
-            model_1.fit(X1, Y1)
+            try:
+                model_0 = MLPRegressor(
+                    hidden_layer_sizes=(64, 32),
+                    activation='relu',
+                    max_iter=10000,
+                    random_state=42,
+                    solver='lbfgs',  # Use deterministic solver instead of 'adam'
+                    max_fun=15000  # Increase max function evaluations for lbfgs
+                )
+                model_1 = MLPRegressor(
+                    hidden_layer_sizes=(64, 32),
+                    activation='relu',
+                    max_iter=10000,
+                    random_state=42,
+                    solver='lbfgs',  # Use deterministic solver instead of 'adam'
+                    max_fun=15000  # Increase max function evaluations for lbfgs
+                )
+                
+                # Ensure data order is stable (sort by X values for deterministic training)
+                # This ensures that even if customer order varies, MLP sees data in same order
+                sort_idx_0 = np.lexsort([X0[:, i] for i in range(X0.shape[1]-1, -1, -1)])
+                sort_idx_1 = np.lexsort([X1[:, i] for i in range(X1.shape[1]-1, -1, -1)])
+                
+                X0_sorted = X0[sort_idx_0]
+                Y0_sorted = Y0[sort_idx_0]
+                X1_sorted = X1[sort_idx_1]
+                Y1_sorted = Y1[sort_idx_1]
+                
+                model_0.fit(X0_sorted, Y0_sorted)
+                model_1.fit(X1_sorted, Y1_sorted)
 
-            mu_0_hat = model_0.predict(X)
-            mu_1_hat = model_1.predict(X)
+                mu_0_hat = model_0.predict(X)
+                mu_1_hat = model_1.predict(X)
+            finally:
+                # Restore original random state
+                np.random.set_state(original_state)
             
             e = 0.5  # Propensity score
 

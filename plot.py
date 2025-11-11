@@ -35,7 +35,7 @@ def plot_segmentation(labels, X, y_vec, D_vec, algo, M=None, tree=None):
     x_min, x_max = X.min(), X.max()
     y_min, y_max = y_vec.min(), y_vec.max()
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 6))
 
     # Scatter plot
     for label in unique_labels:
@@ -115,7 +115,7 @@ def plot_ground_truth(df, title="Ground-Truth Segmentation", segment_col='true_s
     - y_col: outcome column name
     - D_col: binary treatment indicator column name
     """
-    plt.figure(figsize=(10, 12
+    plt.figure(figsize=(8, 6
                         ))
     colors = ['red', 'green', 'blue', 'purple', 'orange', 'brown']  # extendable for >3 segments
     markers = {0: 'o', 1: 'x'}

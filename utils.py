@@ -150,12 +150,12 @@ def evaluate_on_validation(pop: PopulationSimulator, algo, Gamma_val, customers=
         # BUG FIX: Only handle the case when action is undecided (404)
         if assigned_action == 404:
             # For algorithms that can't decide (action=404), need a fallback
-            if algo in ["mst", "policy_tree", "policy_tree-buff"]:
-                # These algorithms may randomly assign when undecided
+            if algo in ["mst", "policy_tree", "policy_tree-buff", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
+                # These algorithms randomly assign when undecided
                 assigned_action = np.random.choice([0, 1])
                 cust.est_segment[algo].est_action = assigned_action
             else:
-                # For other algorithms (dast, kmeans, gmm, clr), use true action as fallback
+                # For other algorithms, use true action as fallback
                 assigned_action = cust.true_segment.action
                 cust.est_segment[algo].est_action = cust.true_segment.action
         # Otherwise, use the estimated action (0 or 1) directly - no modification needed!
@@ -191,7 +191,8 @@ def pick_M_for_algo(algo, df_results_M):
     Select optimal M for algorithm based on validation score.
     
     Tie-breaking rule: When multiple M have the same validation score,
-    select the SMALLEST M (Occam's Razor - prefer simpler models).
+    - For DAST: Select M with smallest within-cluster variance (prefer more homogeneous segments)
+    - For other algorithms: Select smallest M (Occam's Razor)
     """
     val_col = f'{algo}_val'
     max_val_algos = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", 
@@ -206,12 +207,12 @@ def pick_M_for_algo(algo, df_results_M):
     # Find all M with best validation score
     if is_maximize:
         best_score = df_results_M[val_col].max()
-        candidates = df_results_M[df_results_M[val_col] == best_score]
+        candidates = df_results_M[df_results_M[val_col] == best_score].copy()
     else:
         best_score = df_results_M[val_col].min()
-        candidates = df_results_M[df_results_M[val_col] == best_score]
+        candidates = df_results_M[df_results_M[val_col] == best_score].copy()
     
-    # Tie-breaking: Always select smallest M
+    # Tie-breaking: Always select smallest M (Occam's Razor - prefer simpler models)
     picked_M = int(candidates['M'].min())
     
     return {f'{algo}_picked_M': picked_M}
