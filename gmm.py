@@ -1,12 +1,11 @@
 from sklearn.mixture import GaussianMixture
 from ground_truth import PopulationSimulator, SegmentEstimate
-from utils import assign_trained_customers_to_segments, evaluate_on_validation, assign_new_customers_to_segments
-from sklearn.linear_model import LinearRegression
+from utils import assign_trained_customers_to_segments, evaluate_on_validation, assign_new_customers_to_segments, estimate_segment_parameters
 import numpy as np
 
 
 
-def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D_vec, y_vec,algo, random_state=None):
+def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D_vec, y_vec,algo, include_interactions, random_state=None):
     """
     Perform GMM-based segmentation and OLS-based estimation per segment.
 
@@ -34,8 +33,12 @@ def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         D_m = D_vec[idx_m]
         y_m = y_vec[idx_m]
         
-        est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m)
-        est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
+        if include_interactions:
+            est_alpha, est_beta, est_tau, est_action, est_delta = estimate_segment_parameters(x_m, D_m, y_m, include_interactions)
+            est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m, est_delta=est_delta)
+        else:
+            est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m, include_interactions)
+            est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
         pop.est_segments_list[f"{algo}"].append(est_seg)
 
     # Link each customer to estimated segment
@@ -53,14 +56,3 @@ def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         raise ValueError("model_selection must be either 'standard' or 'da'")
     
 
-def estimate_segment_parameters(X, D, Y):
-
-    X_design = np.hstack((np.ones((X.shape[0], 1)), X))
-    
-    model = LinearRegression(fit_intercept=False).fit(X_design, Y)
-    theta = model.coef_.ravel()
-    est_alpha = theta[0]
-    est_beta = theta[1:]
-    est_tau = np.mean(Y[D==1]) - np.mean(Y[D==0])
-    est_action = int(est_tau >= 0)
-    return est_alpha, est_beta, est_tau, est_action

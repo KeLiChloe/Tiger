@@ -3,22 +3,23 @@ import numpy as np
 from sklearn.base import BaseEstimator, clone
 # from scipy.spatial.distance import cdist
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import Ridge, LinearRegression
+from sklearn.linear_model import Ridge
 from sklearn.base import clone
 from sklearn.utils.validation import check_is_fitted
 from ground_truth import PopulationSimulator, SegmentEstimate
-from utils import assign_trained_customers_to_segments, estimate_segment_parameters, assign_new_customers_to_segments, evaluate_on_validation
+from utils import assign_trained_customers_to_segments, estimate_segment_parameters, assign_new_customers_to_segments, evaluate_on_validation, build_design_matrix
 
 
 # The expected shape of y is (N,) not (N, 1)!!!!!
 
 class CLRpRegressor(BaseEstimator):
-    def __init__(self, num_planes, kmeans_coef, clr_lr=None, max_iter=5, num_tries=8, clf=None):
+    def __init__(self, num_planes, kmeans_coef, clr_lr=None, max_iter=5, num_tries=8, clf=None, include_interactions=False):
         self.num_planes = num_planes
         self.kmeans_coef = kmeans_coef
         self.num_tries = num_tries
         self.clr_lr = clr_lr
         self.max_iter = max_iter
+        self.include_interactions = include_interactions
 
         if clf is None:
             self.clf = RandomForestClassifier(n_estimators=10)
@@ -39,9 +40,25 @@ class CLRpRegressor(BaseEstimator):
             self.cluster_labels[0] = 1 if self.cluster_labels[0] == 0 else 0
         
         # fit classifier to predict cluster labels
-        # remove D_all from X when fitting clf
-        X_no_D = X_D[:, :-1]
-        self.clf.fit(X_no_D, self.cluster_labels)
+        # remove D and interaction terms from X_D when fitting clf
+        # X_D format: [intercept, x, D, x*D (if interactions)]
+        
+        if self.include_interactions:
+            # X_D = [intercept(1), x(d), D(1), x*D(d)]
+            # Calculate d from shape: 2d + 2 = total columns
+            n_cols = X_D.shape[1]
+            d = (n_cols - 2) // 2
+            # Keep [intercept, x], remove [D, x*D]
+            X_no_D = X_D[:, :(d+1)]
+        else:
+            # X_D = [intercept(1), x(d), D(1)]
+            # Remove last column (D)
+            X_no_D = X_D[:, :-1]
+        
+        # RandomForestClassifier doesn't need intercept (it's not a linear model)
+        # Remove intercept column (first column) before fitting clf
+        X_for_clf = X_no_D[:, 1:]  # Keep only [x], remove [intercept]
+        self.clf.fit(X_for_clf, self.cluster_labels)
 
     def predict(self, X_only):
         check_is_fitted(self, ['cluster_labels', 'models'])
@@ -67,7 +84,8 @@ def clr(X_D, y, k, kmeans_coef, lr=None, max_iter=10, cluster_labels=None):
   
     if lr is None:
         # set fit_intercept=True if X do not contain intercept term
-        lr = Ridge(alpha=1e-5, fit_intercept=True)
+        # set fit_intercept=False if X contains intercept term
+        lr = Ridge(alpha=1e-5, fit_intercept=False)
   
     models = [clone(lr) for _ in range(k)]
     scores = np.empty((X_D.shape[0], k))
@@ -123,19 +141,21 @@ def bic_score(X_D, y, cluster_labels, models):
     logL = -0.5 * n * (np.log(2 * np.pi * sigma2) + 1)
 
     # number of parameters
-    p = k * (d+1)  # k linear models with d params each + (k-1) for cluster probs
+    # Each model has d parameters (X_D already includes all features: intercept, x, D, x*D)
+    # Plus (k-1) parameters for cluster assignment probabilities (sum to 1 constraint)
+    p = k * d + (k - 1)
 
     BIC = -2 * logL + p * np.log(n)
     return BIC
 
 
-def CLR_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D_vec, y_vec, kmeans_coef, num_tries, algo, random_state=None):
+def CLR_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D_vec, y_vec, kmeans_coef, num_tries, algo, include_interactions, random_state=None):
     
     
     # Important: y_vec needs to be shape (N,) not (N, 1). 
     y_vec = y_vec.ravel()
-    X_D = np.column_stack((x_mat, D_vec))  # add D as a feature
-    CLR = CLRpRegressor(num_planes=n_segments, kmeans_coef=kmeans_coef, num_tries=num_tries)
+    X_D = build_design_matrix(x_mat, D_vec, include_interactions)
+    CLR = CLRpRegressor(num_planes=n_segments, kmeans_coef=kmeans_coef, num_tries=num_tries, include_interactions=include_interactions)
     CLR.fit(X_D, y_vec, seed=random_state)
     clr_labels = CLR.cluster_labels
     bic = bic_score(X_D, y_vec, CLR.cluster_labels, CLR.models)
@@ -154,8 +174,12 @@ def CLR_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         D_m = D_vec[idx_m]
         y_m = y_vec[idx_m]
         
-        est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m)
-        est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
+        if include_interactions:
+            est_alpha, est_beta, est_tau, est_action, est_delta = estimate_segment_parameters(x_m, D_m, y_m, include_interactions)
+            est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m, est_delta=est_delta)
+        else:
+            est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m, include_interactions)
+            est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
         pop.est_segments_list[f"{algo}"].append(est_seg)
 
     # Link each customer to estimated segment

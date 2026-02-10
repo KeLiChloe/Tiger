@@ -55,6 +55,7 @@ def plot_segmentation(labels, X, y_vec, D_vec, algo, M=None, tree=None):
     # Draw decision boundaries for tree-based methods
     if tree is not None and algo in ["dast", "mst"]:
         splits = extract_tree_splits(tree)
+        # splits = [4,9,11.0]
         for split_x in splits:
             plt.axvline(x=split_x, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Decision boundary')
         # Remove duplicate labels in legend
@@ -100,6 +101,7 @@ def extract_tree_splits(tree):
     
     traverse(tree.root)
     return sorted(splits)
+    # return [7, 12]
 
 
 

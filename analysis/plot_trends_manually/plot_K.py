@@ -56,29 +56,18 @@ rcParams.update({
 })
 
 # ===== 2. 数据 =====
-d = list(range(1, 21))
 
-MST = [
-    4.47, 6.42, 9.15, 7.07, 6.86, 9.74, 6.84, 10.87, 6.31, 7.54,
-    3.29, 3.72, 5.89, 3.13, 2.96, 2.37, 2.02, 2.03, 1.10, 2.15
-]
+# ===== 2. 数据（已按新表更新）=====
+# K = 2, 3, ..., 9 （8 个取值）
+K = list(range(2, 11))
 
-KMeans = [
-    10.50, 5.43, 7.01, 6.41, 6.70, 5.08, 2.52, 3.49, 2.29, 1.29,
-    2.92, 1.12, 2.03, -0.34, 1.74, 0.21, -0.47, -0.69, -0.17, -1.10
-]
+mst    = [0.19,  2.33,  5.75, 10.54,  6.31,  9.00,  13.39,  9.53, 11.36]
+kmeans = [1.83, 11.59,  2.11,  7.25,  3.73,  4.59,  0.41, -1.73, 1.58]
+gmm    = [1.84, 12.02,  7.08, 15.20,  9.32,  6.23, 9.04, 8.81, 6.32]
+clr    = [0.98, 11.48, 24.25, 20.47, 18.99, 23.18, 32.44, 23.68, 18.53]
 
-GMM = [
-    7.20, 9.63, 4.87, 7.82, 10.67, 7.29, 8.51, 8.13, 7.19, 4.34,
-    4.26, 4.30, 1.95, 1.78, 3.52, 1.34, -0.42, 0.36, 2.22, -0.73
-]
 
-CLR = [
-    5.26, 4.86, 9.39, 15.98, 9.92, 8.60, 11.51, 19.02, 11.01, 7.17,
-    8.87, 8.12, 7.51, 4.25, 2.57, 10.01, 3.57, 2.62, 2.85, 3.68
-]
-
-# ===== 3. 配色方案（原始配色） =====
+# ===== 3. 配色方案（与 plot_d 一致） =====
 colors = {
     "KMeans": "#007ad1",  # 蓝
     "GMM": "#ff7f0e",     # 橙
@@ -86,7 +75,7 @@ colors = {
     "MST": "#da368d"      # 品红
 }
 
-# ===== 4. 绘制图表（单栏宽度：3.5英寸） =====
+# ===== 4. 绘制图表 =====
 # Management Science 推荐：单栏 3.5", 双栏 7.5"
 fig, ax = plt.subplots(figsize=(7, 4.5))
 
@@ -98,15 +87,15 @@ legend_labels = {
     "MST": "v.s. MST"
 }
 
-for name, data in [("KMeans", KMeans), ("GMM", GMM), ("CLR", CLR), ("MST", MST)]:
-    ax.plot(d, data, 
+for name, data in [("KMeans", kmeans), ("GMM", gmm), ("CLR", clr), ("MST", mst)]:
+    ax.plot(K, data, 
             color=colors[name],
             linewidth=1.5,
             alpha=0.9,
             label=legend_labels[name],
             linestyle="-",
             marker="o",
-            markersize=4,
+            markersize=5,
             markerfacecolor=colors[name],
             markeredgewidth=0.5,
             markeredgecolor='white')
@@ -115,19 +104,19 @@ for name, data in [("KMeans", KMeans), ("GMM", GMM), ("CLR", CLR), ("MST", MST)]
 ax.axhline(0, color="black", linestyle="--", linewidth=1.0, alpha=0.6, zorder=1)
 
 # 轴标签（专业表述）
-ax.set_xlabel("Covariate Dimension ($d$)", fontsize=11, fontweight='normal')
+ax.set_xlabel("Number of True Clusters ($K$)", fontsize=11, fontweight='normal')
 ax.set_ylabel("DAST Advantage Ratio (%)", fontsize=11, fontweight='normal')
 
 # 标题
 ax.set_title("DAST Performance Advantage", fontsize=12, pad=15, fontweight='normal')
 
 # 设置 x 轴刻度
-ax.set_xticks(range(2, 21, 2))
-ax.set_xlim(0.5, 20.5)
+ax.set_xticks(K)
+ax.set_xlim(1.5, 10.5)
 
 # y 轴范围（根据数据自动调整，但确保包含0）
-y_min = min([min(KMeans), min(GMM), min(CLR), min(MST)])
-y_max = max([max(KMeans), max(GMM), max(CLR), max(MST)])
+y_min = min([min(kmeans), min(gmm), min(clr), min(mst)])
+y_max = max([max(kmeans), max(gmm), max(clr), max(mst)])
 y_margin = (y_max - y_min) * 0.1
 ax.set_ylim(y_min - y_margin, y_max + y_margin)
 
@@ -161,11 +150,11 @@ plt.tight_layout()
 
 # ===== 5. 保存高质量图片（期刊要求） =====
 # 保存为多种格式
-plt.savefig("figure_dimension_comparison.pdf", format='pdf', dpi=600, bbox_inches='tight')
-plt.savefig("figure_dimension_comparison.png", format='png', dpi=600, bbox_inches='tight')
+plt.savefig("figures/figure_K_comparison.pdf", format='pdf', dpi=600, bbox_inches='tight')
+plt.savefig("figures/figure_K_comparison.png", format='png', dpi=600, bbox_inches='tight')
 
 print("✓ Figures saved in publication quality:")
-print("  - figure_dimension_comparison.pdf (recommended)")
-print("  - figure_dimension_comparison.png (for review)")
+print("  - figure_K_comparison.pdf (recommended)")
+print("  - figure_K_comparison.png (for review)")
 
 # plt.show()

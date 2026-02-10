@@ -9,12 +9,28 @@ import yaml
 import json
 import argparse
 
-def build_design_matrix(x_array, D_array):
-    """Add intercept and treatment column to covariates."""
-    N, _ = x_array.shape
+def build_design_matrix(x_array, D_array, include_interactions):
+    """
+    Add intercept and treatment column to covariates.
+    
+    Parameters:
+        x_array: (N, d) array of covariates
+        D_array: (N,) array of treatment indicators
+        include_interactions: If True, includes treatment * covariate interactions
+    
+    Returns:
+        Design matrix with columns: [intercept, x, D, x*D (if include_interactions)]
+    """
+    N, d = x_array.shape
     intercept = np.ones((N, 1))
     D_col = D_array.reshape(-1, 1)
-    return np.hstack([intercept, x_array, D_col])
+    
+    if include_interactions:
+        # Add interaction terms: x_j * D for each covariate j
+        interactions = x_array * D_col  # Element-wise multiplication
+        return np.hstack([intercept, x_array, D_col, interactions])
+    else:
+        return np.hstack([intercept, x_array, D_col])
 
 
 
@@ -37,32 +53,58 @@ def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_label
         assert cust.est_segment[algo].segment_id == m, f"Segment ID mismatch for customer {cust.customer_id}: expected {m}, got {cust.est_segment[algo].segment_id}"
         
 
-def estimate_segment_parameters(X, D, Y):
+def estimate_segment_parameters(X, D, Y, include_interactions):
+    """
+    Estimate segment parameters using linear regression.
+    
+    Parameters:
+        X: (N, d) array of covariates
+        D: (N,) array of treatment indicators
+        Y: (N,) array of outcomes
+        include_interactions: If True, estimates interaction coefficients (delta)
+    
+    Returns:
+        If include_interactions=False: (est_alpha, est_beta, est_tau, est_action)
+        If include_interactions=True: (est_alpha, est_beta, est_tau, est_action, est_delta)
+    """
     Y = np.ravel(Y)
     D = np.ravel(D)
-
-    """Fit OLS model Y ~ x + D and return parameters ."""
-    if len(X) < X.shape[1] + 1:
-        # print("Warning: Not enough data to fit OLS.")
-            
-        return 404, np.ones(X.shape[1])*404, 404, 404
+    d = X.shape[1]
     
-    X_design = build_design_matrix(X, D)
+    # use diffs-in-means to estimate action
+    Y1 = Y[D == 1]
+    Y0 = Y[D == 0]
+    est_action = int(np.mean(Y1) > np.mean(Y0))
     
-    model = LinearRegression(fit_intercept=False).fit(X_design, Y)
-    theta = model.coef_.ravel()
-    est_alpha = theta[0]
-    est_beta = theta[1:-1]
+    # Adjust minimum data requirement based on whether interactions are included
+    # min_samples = d + 2 if not include_interactions else 2*d + 2
+    
+    # if len(X) < min_samples:
+    #     # print("Warning: Not enough data to fit model.")
+    #     error_val = (404, np.ones(d)*404, 404, 404, np.ones(d)*404) if include_interactions else (404, np.ones(d)*404, 404, 404)
+    #     return error_val
+    
     # check if D_vec contains only 0s or 1s
     if np.all(D == 0) or np.all(D == 1):
         print("Warning: D_i contains only one treatment assignment.")
-        return 404, np.ones(X.shape[1])*404, 404, 404
-        
+        error_val = (404, np.ones(d)*404, 404, 404, np.ones(d)*404) if include_interactions else (404, np.ones(d)*404, 404, 404)
+        return error_val
+    
+    X_design = build_design_matrix(X, D, include_interactions=include_interactions)
+    
+    model = LinearRegression(fit_intercept=False).fit(X_design, Y)
+    theta = model.coef_.ravel()
+    
+    est_alpha = theta[0]
+    est_beta = theta[1:d+1]
+    est_tau = theta[d+1]
+    
+    if include_interactions:
+        est_delta = theta[d+2:]  # Interaction coefficients
+    
+    if include_interactions:
+        return est_alpha, est_beta, est_tau, est_action, est_delta
     else:
-        # compute est_tau as the mean difference in predicted outcomes when D=1 vs D=0
-        est_tau = theta[-1]
-        est_tau_mean_diff = np.mean(Y[D==1]) - np.mean(Y[D==0])
-        est_action = int(est_tau >= 0)
         return est_alpha, est_beta, est_tau, est_action
 
 
@@ -92,7 +134,7 @@ def plot_segment_sankey(original, pruned):
 
 
 # estimated total profits of a segment after applying the learnt policy to the customers in that segment
-def compute_node_DR_value(Y, D, gamma, indices, buff):
+def compute_node_DR_value(Y, D, gamma, indices, use_hybrid_method):
     D_m = D[indices]
     Y_m = Y[indices]
 
@@ -110,7 +152,7 @@ def compute_node_DR_value(Y, D, gamma, indices, buff):
     a_i = int(tau_hat >= 0)
     
     
-    if buff is True:
+    if use_hybrid_method is True:
         # Method 1: Direct + Gamma
         # If D_m[i] = a_i, then we get profit Y_m[i]
         # If D_m[i] != a_i, then we get profit gamma_a_i_m[i]
@@ -150,7 +192,7 @@ def evaluate_on_validation(pop: PopulationSimulator, algo, Gamma_val, customers=
         # BUG FIX: Only handle the case when action is undecided (404)
         if assigned_action == 404:
             # For algorithms that can't decide (action=404), need a fallback
-            if algo in ["mst", "policy_tree", "policy_tree-buff", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
+            if algo in ["mst", "policy_tree", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
                 # These algorithms randomly assign when undecided
                 assigned_action = np.random.choice([0, 1])
                 cust.est_segment[algo].est_action = assigned_action
@@ -194,27 +236,33 @@ def pick_M_for_algo(algo, df_results_M):
     - For DAST: Select M with smallest within-cluster variance (prefer more homogeneous segments)
     - For other algorithms: Select smallest M (Occam's Razor)
     """
+        
     val_col = f'{algo}_val'
     max_val_algos = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", 
-                     "policy_tree-buff", "dast", "mst", "kmeans-standard"]
+                     "dast", "mst", "kmeans-standard"]
     min_val_algos = ["gmm-standard", "clr-standard"]
+    meta_learners = ["t_learner", "s_learner", "x_learner", "dr_learner"]
     
-    if algo not in max_val_algos and algo not in min_val_algos:
+    if algo not in max_val_algos and algo not in min_val_algos and algo not in meta_learners:
         raise ValueError(f"Unknown algorithm: {algo}")
     
     is_maximize = algo in max_val_algos
+    is_minimize = algo in min_val_algos
+    is_meta_learner = algo in meta_learners
     
     # Find all M with best validation score
     if is_maximize:
         best_score = df_results_M[val_col].max()
         candidates = df_results_M[df_results_M[val_col] == best_score].copy()
-    else:
+        picked_M = int(candidates['M'].min()) # Tie-breaking: Always select smallest M (Occam's Razor - prefer simpler models)
+    elif is_minimize:
         best_score = df_results_M[val_col].min()
         candidates = df_results_M[df_results_M[val_col] == best_score].copy()
+        picked_M = int(candidates['M'].min()) # Tie-breaking: Always select smallest M (Occam's Razor - prefer simpler models)
+    elif is_meta_learner:
+        picked_M = "Not applicable"
     
-    # Tie-breaking: Always select smallest M (Occam's Razor - prefer simpler models)
-    picked_M = int(candidates['M'].min())
-    
+
     return {f'{algo}_picked_M': picked_M}
 
 
@@ -247,6 +295,7 @@ def parse_args():
     parser.add_argument("--alpha_range", type=float, nargs=2, help="Range for alpha parameter")
     parser.add_argument("--beta_range", type=float, nargs=2, help="Range for beta parameter")
     parser.add_argument("--tau_range", type=float, nargs=2, help="Range for tau parameter")
+    parser.add_argument("--delta_range", type=float, nargs=2, help="Range for delta (interaction) parameter")
     parser.add_argument("--x_mean_range", type=float, nargs=2, help="Range for x_mean parameter")
 
     
@@ -259,18 +308,24 @@ def parse_args():
     parser.add_argument("--disturb_covariate_noise", type=float, help="Covariate noise across segments")
     parser.add_argument("--Y_noise_std_scale", type=float, required=True, help="Scale factor for outcome noise as a multiple of average |tau| (treatment effect magnitude)")
     
-
     parser.add_argument("--kmeans_coef", type=float, help="Coefficient for k-means weighting")
     
 
     parser.add_argument("--DR_generation_method", type=str, choices=["mlp", "forest", "reg"],
                         help="DR generation method (for DAST only)")
     
+    # default is True
+    parser.add_argument("--use_hybrid_method", type=lambda x: str(x).lower() == 'true', 
+                        default=True, 
+                        help="Use hybrid method for tree splitting and evaluation (default: True). Pass True or False")
+    
     parser.add_argument("--implementation_scale", type=float, help="Scale of implementation population")
 
     parser.add_argument("--N_sims", type=int, help="Number of simulations to run")
     
     parser.add_argument("--save_file", type=str, help="Path to save experiment results")
+    
+    parser.add_argument("--sequence_seed", type=int, help="Random seed for simulation sequence")
 
     # 算法列表
     parser.add_argument("--algorithms", type=str, nargs="+",

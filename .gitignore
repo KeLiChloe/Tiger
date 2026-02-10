@@ -1,5 +1,5 @@
 figures
 __pycache__
 *.pkl
-exp_11.08/
-exp_archive/
+exp_*/
+.DS_Store

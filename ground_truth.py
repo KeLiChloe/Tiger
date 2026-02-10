@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn.neural_network import MLPRegressor
 from econml.dr import DRLearner
 import rpy2.robjects as ro
@@ -11,32 +10,50 @@ from rpy2.robjects.conversion import localconverter
 from scipy.spatial.distance import pdist, squareform
 
 
-ALGORITHMS = ["gmm-standard", "gmm-da", "dast", "policy_tree", "policy_tree-buff", "mst", "kmeans-standard", "kmeans-da", "clr-standard", "clr-da"]
+ALGORITHMS = ["kmeans-standard", "kmeans-da", 
+              "gmm-standard", "gmm-da", 
+              "clr-standard", "clr-da",
+              "policy_tree", 
+              "mst", 
+              "dast", 
+              "t_learner",
+              "x_learner",
+              "s_learner",
+              "dr_learner"]
 
 grf = importr('grf')
 policytree = importr('policytree')
 ro.r('library(policytree)')
 
 class SegmentTrue:
-    def __init__(self, alpha, beta, tau, segment_id, x_mean=None):
+    def __init__(self, alpha, beta, tau, segment_id, x_mean=None, delta=None):
         self.alpha = alpha
         self.beta = beta  # np.array of shape (d,)
         self.tau = tau
+        self.delta = delta  # np.array of shape (d,) for interaction terms
         self.x_mean = x_mean
         self.segment_id = segment_id
         self.action = int(tau>=0)
 
     def generate_outcome(self, x, D_i, noise_std, signal_d):
         noise = np.random.normal(0, noise_std)
-        return self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau * D_i + noise
+        # Base outcome: y = alpha + beta @ x + tau * D + delta @ x * D + noise
+        base = self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau * D_i
+        
+        # Add interaction terms if delta is provided
+        if self.delta is not None:
+            interaction = (self.delta[:signal_d] * x[:signal_d]).sum() * D_i
+            return base + interaction + noise
+        return base + noise
         
 
         
 class SegmentEstimate:
-    def __init__(self, est_alpha, est_beta, est_tau, est_action, segment_id=None):
+    def __init__(self, est_alpha, est_beta, est_tau, est_action, segment_id=None, est_delta=None):
         self.est_alpha = est_alpha
         self.est_beta = est_beta  # np.array of shape (d,)
         self.est_tau = est_tau
+        self.est_delta = est_delta  # np.array of shape (d,) for interaction terms
         self.est_action = est_action  # 0 or 1
         self.segment_id = segment_id
 
@@ -60,13 +77,18 @@ class Customer_implement:
         
         self.est_segment = {algo: None for algo in ALGORITHMS}
         
-    def evaluate_profits(self, algo):
-        # evaluate the profit for a single customer under algo
-        if self.est_segment[algo].est_action != 404:
-            self.implement_action = self.est_segment[algo].est_action 
+    def evaluate_profits(self, algo, implement_action=None):
         
-        else: # 404 case
-            self.implement_action = self.true_segment.action
+        # evaluate the profit for a single customer under algo
+        if implement_action is None:
+            if self.est_segment[algo].est_action != 404:
+                self.implement_action = self.est_segment[algo].est_action 
+            
+            else: # 404 case
+                self.implement_action = self.true_segment.action
+        else:
+            # for evaluating the meta-learner performance
+            self.implement_action = implement_action
         
         # Option 1: No noise for deterministic profit evaluation (current)
         noise_std = 0 # set noise to 0 for profit evaluation
@@ -90,7 +112,7 @@ class PopulationSimulator:
         self.disturb_covariate_noise = disturb_covariate_noise
         self.signal_d = d if partial_x == 0 else max(1, int(d * partial_x))  # number of features used in outcome generation
         self.disturb_d = d - self.signal_d  # number of features NOT used in outcome generation
-        self.disallowed_ball_radius = disallowed_ball_radius if disallowed_ball_radius is not None else 0.5
+        self.disallowed_ball_radius = disallowed_ball_radius if disallowed_ball_radius is not None else 0
 
         self.true_segments = self._init_true_segments(X_mean_vectors)
         
@@ -157,6 +179,8 @@ class PopulationSimulator:
                 alpha = np.random.uniform(*pr["alpha"])
                 beta = np.random.uniform(*pr["beta"], size=self.d)
                 tau = np.random.uniform(*pr["tau"])
+                # Generate delta (interaction coefficients) if specified in param_range
+                delta = np.random.uniform(*pr["delta"], size=self.d) if pr["delta"] is not None else None
                 
                 # Generate x_mean with minimum distance constraint
                 max_attempts = 100
@@ -182,15 +206,17 @@ class PopulationSimulator:
                         x_mean = x_mean_candidate
                 
                 generated_means.append(x_mean)
-                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean))
+                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean, delta=delta))
         else:
             # Use provided mean vectors
             for k in range(self.K):
                 alpha = np.random.uniform(*pr["alpha"])
                 beta = np.random.uniform(*pr["beta"], size=self.d)
                 tau = np.random.uniform(*pr["tau"])
+                # Generate delta (interaction coefficients) if specified in param_range
+                delta = np.random.uniform(*pr["delta"], size=self.d) if pr["delta"] is not None else None
                 x_mean = X_mean_vectors[k]
-                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean))
+                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean, delta=delta))
         
         return true_segments
     
@@ -296,7 +322,6 @@ class PopulationSimulator:
         return pilot_customers
 
 
-
     
         
     def _generate_implement_customers(self):
@@ -379,8 +404,11 @@ class PopulationSimulator:
             beta = seg.beta
             alpha = seg.alpha
             tau = seg.tau
-            m_y = alpha + beta @ mu + tau * D
-            v_y = beta @ Sigma @ beta + sigma**2
+            delta = seg.delta if seg.delta is not None else np.zeros(self.d)
+            # Mean includes interaction term: alpha + beta @ mu + tau * D + delta @ mu * D
+            m_y = alpha + beta @ mu + tau * D + (delta @ mu) * D
+            # Variance includes interaction term contributions
+            v_y = beta @ Sigma @ beta + (delta @ Sigma @ delta) * (D**2) + 2 * D * (beta @ Sigma @ delta) + sigma**2
             return m_y, v_y
 
         def bc_univariate(m1, v1, m2, v2):
@@ -424,10 +452,17 @@ class PopulationSimulator:
             beta = seg.beta
             alpha = seg.alpha
             tau = seg.tau
-            m = np.concatenate([mu, [alpha + beta @ mu + tau * D]])
+            delta = seg.delta if seg.delta is not None else np.zeros(self.d)
+            # Mean of Y includes interaction: alpha + beta @ mu + tau * D + delta @ mu * D
+            m_y = alpha + beta @ mu + tau * D + (delta @ mu) * D
+            m = np.concatenate([mu, [m_y]])
+            # Covariance: cov(X, Y) = Sigma @ (beta + D * delta)
+            cov_xy = Sigma @ (beta + D * delta)
+            # Variance of Y: var(Y) = (beta + D*delta)^T @ Sigma @ (beta + D*delta) + sigma^2
+            var_y = (beta + D * delta) @ Sigma @ (beta + D * delta) + sigma**2
             S = np.block([
-                [Sigma,             Sigma @ beta.reshape(-1,1)],
-                [beta.reshape(1,-1) @ Sigma,  beta @ Sigma @ beta + sigma**2]
+                [Sigma,                     cov_xy.reshape(-1,1)],
+                [cov_xy.reshape(1,-1),      var_y]
             ])
             return m, S
 
@@ -468,6 +503,7 @@ class PopulationSimulator:
         alphas = [seg.alpha for seg in self.true_segments]
         betas = [seg.beta for seg in self.true_segments]
         taus = [seg.tau for seg in self.true_segments]
+        deltas = [seg.delta if seg.delta is not None else np.zeros(d) for seg in self.true_segments]
 
         total_entropy = 0.0
         for i in range(N):
@@ -481,13 +517,14 @@ class PopulationSimulator:
                 alpha = alphas[k]
                 beta = betas[k]
                 tau = taus[k]
+                delta = deltas[k]
 
                 # log p(x | Z=k)
                 dx = x - mu
                 llx = -0.5 * (d * np.log(2*np.pi) + logdet_Sigma + dx @ Sigma_inv @ dx)
 
-                # log p(y | x, D, Z=k)
-                mean_y = alpha + beta @ x + tau * d_i
+                # log p(y | x, D, Z=k) - includes interaction term
+                mean_y = alpha + beta @ x + tau * d_i + (delta @ x) * d_i
                 lly = -0.5 * (np.log(2*np.pi*sigma2) + (y - mean_y)**2 / sigma2)
 
                 logliks.append(llx + lly)  # equal priors
@@ -522,7 +559,6 @@ class PopulationSimulator:
         if method == "reg":
             model_0 = LinearRegression()
             model_1 = LinearRegression()
-
             
             model_0.fit(X0, Y0)
             model_1.fit(X1, Y1)
@@ -555,47 +591,22 @@ class PopulationSimulator:
 
         
         if method == "mlp":
-            # CRITICAL: Set numpy random seed before MLP training to ensure reproducibility
-            # MLP training can be affected by numpy's global random state, even with random_state parameter
-            original_state = np.random.get_state()
-            np.random.seed(42)
+            model_0 = MLPRegressor(
+                hidden_layer_sizes=(64, 32),
+                activation='relu',
+                max_iter=10000,
+            )
+            model_1 = MLPRegressor(
+                hidden_layer_sizes=(64, 32),
+                activation='relu',
+                max_iter=10000,
+            )
             
-            try:
-                model_0 = MLPRegressor(
-                    hidden_layer_sizes=(64, 32),
-                    activation='relu',
-                    max_iter=10000,
-                    random_state=42,
-                    solver='lbfgs',  # Use deterministic solver instead of 'adam'
-                    max_fun=15000  # Increase max function evaluations for lbfgs
-                )
-                model_1 = MLPRegressor(
-                    hidden_layer_sizes=(64, 32),
-                    activation='relu',
-                    max_iter=10000,
-                    random_state=42,
-                    solver='lbfgs',  # Use deterministic solver instead of 'adam'
-                    max_fun=15000  # Increase max function evaluations for lbfgs
-                )
-                
-                # Ensure data order is stable (sort by X values for deterministic training)
-                # This ensures that even if customer order varies, MLP sees data in same order
-                sort_idx_0 = np.lexsort([X0[:, i] for i in range(X0.shape[1]-1, -1, -1)])
-                sort_idx_1 = np.lexsort([X1[:, i] for i in range(X1.shape[1]-1, -1, -1)])
-                
-                X0_sorted = X0[sort_idx_0]
-                Y0_sorted = Y0[sort_idx_0]
-                X1_sorted = X1[sort_idx_1]
-                Y1_sorted = Y1[sort_idx_1]
-                
-                model_0.fit(X0_sorted, Y0_sorted)
-                model_1.fit(X1_sorted, Y1_sorted)
+            model_0.fit(X0, Y0)
+            model_1.fit(X1, Y1)
 
-                mu_0_hat = model_0.predict(X)
-                mu_1_hat = model_1.predict(X)
-            finally:
-                # Restore original random state
-                np.random.set_state(original_state)
+            mu_0_hat = model_0.predict(X)
+            mu_1_hat = model_1.predict(X)
             
             e = 0.5  # Propensity score
 
@@ -646,6 +657,7 @@ class PopulationSimulator:
                 'alpha': seg.alpha,
                 'beta': seg.beta,
                 'tau': seg.tau,
+                'delta': seg.delta if seg.delta is not None else np.zeros(self.d),
             }
             for seg in self.true_segments
         }

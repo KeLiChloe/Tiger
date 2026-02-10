@@ -19,7 +19,6 @@ import pickle
 multiprocessing.set_start_method('fork') 
 import time
 import json
-
 def debug_segment_comparison(pop, algo):
     """
     Debug function to compare segment assignments and estimated parameters.
@@ -192,17 +191,19 @@ def main(args):
     start_time = time.time()
     
     # Fixed mean vectors for reproducibility (3 clusters for d=1)
+    # X_mean_vectors = np.random.uniform(-20, 20, size=(3, 1))
     X_mean_vectors = np.array([
-        [-4.0],
-        [4.0],
-        [8.0],
+        [-2.14],
+        [8.75],
+        [13.58],
     ])
     print(f"X mean vectors for segments (shape={X_mean_vectors.shape}): {[x[0] for x in X_mean_vectors]}")
 
     for _ in trange(args.N_sims):
         
         seed = random.randint(0, 100000)
-        np.random.seed(13337)   # 5909, 67691
+        np.random.seed(65484)   # 80707, 5909, 67691
+        random.seed(65484)
         print(f"Random seed: {seed}")
         
         pop = PopulationSimulator(N_total_pilot_customers, 
@@ -234,6 +235,8 @@ def main(args):
         # BUG FIX: 重置随机种子，确保后续算法使用相同的随机数序列
         # 无论 implementation_scale 如何，pilot customers 和算法训练都保持一致
         np.random.seed(92)
+        random.seed(92)
+
         
         if args.compute_overlap:
             X_overlap_score = pop.compute_covariate_overlap()
@@ -302,7 +305,7 @@ def main(args):
                         DA_score_clr, _ = CLR_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, kmeans_coef=args.kmeans_coef, num_tries=8, algo=algo, random_state=seed)
                         
                     elif algo == "dast":
-                        dast_tree, dast_val_score, segment_dict = DAST_segment_and_estimate(pop, M, max_depth=depth_dast, min_leaf_size=2, epsilon=0.0, algo=algo, debug=True)
+                        dast_tree, dast_val_score, segment_dict = DAST_segment_and_estimate(pop, M, max_depth=depth_dast, min_leaf_size=2, epsilon=1e-2, algo=algo, debug=True)
                     
                     elif algo == "mst":
                         mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, threshold_grid=40, algo=algo)
@@ -368,10 +371,8 @@ def main(args):
                         print(f"\nValidation Scores for each M:")
                         for idx, row in df_results_M.iterrows():
                             score = row[f'{algo}_val']
-                            ari = row['ARI']
-                            nmi = row['NMI']
                             if score is not None:
-                                print(f"  M = {row['M']:2d}: val_score = {score:8.6f}, ARI = {ari:.4f}, NMI = {nmi:.4f}")
+                                print(f"  M = {row['M']:2d}: val_score = {score:8.6f}")
                             else:
                                 print(f"  M = {row['M']:2d}: val_score = None")
                         
@@ -498,10 +499,7 @@ def main(args):
         
         # Deep comparison between DAST and KMeans if both are present
         if args.debug_comparison:
-            if "dast" in args.algorithms and "kmeans-da" in args.algorithms:
-                compare_two_algorithms(pop, "dast", "kmeans-da")
-            elif "dast" in args.algorithms and "kmeans-standard" in args.algorithms:
-                compare_two_algorithms(pop, "dast", "kmeans-standard")
+            compare_two_algorithms(pop, "dast", "mst")
     
         # print(f"Oracle profits: {oracle_profits_implementation['oracle_profit']:.2f}")
 
