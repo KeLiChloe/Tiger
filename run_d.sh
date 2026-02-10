@@ -7,7 +7,7 @@ mkdir -p "$SAVE_DIR"
 
 # ===== 实验循环 =====
 # varying d: 1 -> 15
-for D in $(seq 1 1 15); do
+for D in $(seq 12 1 15); do
     D_TAG=$(printf "%02d" "$D")
 
     echo "🚀 Running experiment with d=${D} and delta_range=(${DELTA_LOW}, ${DELTA_HIGH}) ..."
