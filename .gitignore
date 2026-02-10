@@ -1,4 +1,5 @@
 figures
 __pycache__
 *.pkl
+exp_*/
 .DS_Store
