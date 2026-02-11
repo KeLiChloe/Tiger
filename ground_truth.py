@@ -110,7 +110,7 @@ class PopulationSimulator:
         
         self.param_range = param_range
         self.disturb_covariate_noise = disturb_covariate_noise
-        self.signal_d = d if partial_x == 0 else max(1, int(d * partial_x))  # number of features used in outcome generation
+        self.signal_d = d if partial_x == 1 else max(1, int(d * partial_x))  # number of features used in outcome generation
         self.disturb_d = d - self.signal_d  # number of features NOT used in outcome generation
         self.disallowed_ball_radius = disallowed_ball_radius if disallowed_ball_radius is not None else 0
 
