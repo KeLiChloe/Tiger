@@ -603,7 +603,7 @@ class PopulationSimulator:
         
         # Compute propensity score from training data
         e = np.mean(D_train)  # Empirical treatment probability
-        print(f"  Propensity score e = {e:.3f} (from training data)")
+        # print(f"  Propensity score e = {e:.3f} (from training data)")
 
         if method == "reg":
             model_0 = LinearRegression()
