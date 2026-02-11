@@ -715,14 +715,12 @@ class PopulationSimulator:
         # Compute gamma scores
         if train_frac < 1.0:
             # Normal case: have both train and val
-            print(f"Computing gamma scores: fit on {len(self.train_customers)} train, predict on train and val")
             self.gamma_train, self.gamma_val = self.compute_gamma_scores(
                 self.DR_generation_method, self.train_customers, self.val_customers
             )
         else:
             # train_frac=1.0: all data is training, no validation
             # Still compute gamma_train (some algorithms need it), but gamma_val = None
-            print(f"train_frac=1.0: Computing gamma only for training data")
             self.gamma_train, self.gamma_val = self.compute_gamma_scores(
                 self.DR_generation_method, self.train_customers, []  # Empty val_customers
             )
