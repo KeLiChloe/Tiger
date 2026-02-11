@@ -279,7 +279,7 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
     val_score = None
     if len(pop.val_customers) > 0:
         tree.predict_segment(pop.val_customers, segment_dict)
-        Gamma_val = pop.gamma[[cust.customer_id for cust in pop.val_customers]]
+        Gamma_val = pop.gamma_val
         val_score = evaluate_on_validation(pop, algo=algo, Gamma_val=Gamma_val)
         
     return tree, val_score, segment_dict

@@ -156,7 +156,10 @@ class PopulationSimulator:
         
         self.est_segments_list = {algo: [] for algo in ALGORITHMS}
         
-        self.gamma = self._generate_gamma_matrix(DR_generation_method)
+        # Store DR generation method for later use
+        self.DR_generation_method = DR_generation_method
+        self.gamma_train = None  # Will be computed after train/val split
+        self.gamma_val = None    # Will be computed after train/val split
         
         self.train_customers, self.val_customers, self.train_indices, self.val_indices = None, None, None, None
         
@@ -300,7 +303,8 @@ class PopulationSimulator:
             segment = np.random.choice(self.true_segments)
 
             # 3️⃣ Signal features: cluster-dependent
-            x_signal = np.random.multivariate_normal(mean=segment.x_mean, cov=cov_signal)
+            # Only use first signal_d dimensions of x_mean
+            x_signal = np.random.multivariate_normal(mean=segment.x_mean[:self.signal_d], cov=cov_signal)
 
             # 4️⃣ Disturbing features: come from random noise cluster
             if self.disturb_d > 0:
@@ -320,10 +324,7 @@ class PopulationSimulator:
             pilot_customers.append(cust)
 
         return pilot_customers
-
-
-    
-        
+     
     def _generate_implement_customers(self):
         implement_customers = []
 
@@ -352,7 +353,8 @@ class PopulationSimulator:
             segment = np.random.choice(self.true_segments)
 
             # 3️⃣ Signal part: segment-dependent
-            x_signal = np.random.multivariate_normal(mean=segment.x_mean, cov=cov_signal)
+            # Only use first signal_d dimensions of x_mean
+            x_signal = np.random.multivariate_normal(mean=segment.x_mean[:self.signal_d], cov=cov_signal)
 
             # 4️⃣ Noise part: from an unrelated latent noise cluster
             if self.disturb_d > 0:
@@ -375,36 +377,44 @@ class PopulationSimulator:
 
     # ---------- NEW: overlap function ----------
     def compute_covariate_overlap(self):
-        """Compute average Bhattacharyya coefficient of X distributions across true segments."""
-        Sigma = np.eye(self.d) * (self.signal_covariate_noise ** 2)   # dxd covariance matrix
-        Sigma_inv = np.linalg.inv(Sigma)                       # its inverse
+        """Compute average Bhattacharyya coefficient of X distributions across true segments.
+        Only considers signal dimensions (first signal_d features) as disturbing features don't affect clustering.
+        """
+        # Use signal_d dimensions for covariance (only signal dimensions matter for clustering)
+        Sigma = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
+        Sigma_inv = np.linalg.inv(Sigma)
         K = self.K
 
         bcs = []
         for k in range(K):
             for l in range(k+1, K):
-                mu_k = self.true_segments[k].x_mean
-                mu_l = self.true_segments[l].x_mean
-                dm = mu_k - mu_l                               # difference vector
-                exponent = -0.125 * float(dm.T @ Sigma_inv @ dm)   # scalar
-                bc = np.exp(exponent)                          # should be <= 1
-                bc = float(np.clip(bc, 0.0, 1.0))              # enforce [0,1]
+                # Only use signal dimensions of x_mean
+                mu_k = self.true_segments[k].x_mean[:self.signal_d]
+                mu_l = self.true_segments[l].x_mean[:self.signal_d]
+                dm = mu_k - mu_l
+                exponent = -0.125 * float(dm.T @ Sigma_inv @ dm)
+                bc = np.exp(exponent)
+                bc = float(np.clip(bc, 0.0, 1.0))
                 bcs.append(bc)
 
         return np.mean(bcs) if bcs else 1.0
 
     def compute_outcome_overlap(self):
-        """Compute average Bhattacharyya coefficient of Y distributions across true segments."""
-        Sigma = np.eye(self.d) * (self.signal_covariate_noise ** 2)
+        """Compute average Bhattacharyya coefficient of Y distributions across true segments.
+        Only considers signal dimensions as disturbing features don't affect outcomes.
+        """
+        # Use signal_d dimensions for covariance (only signal dimensions matter for outcomes)
+        Sigma = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
         sigma = self.noise_std
         K = self.K
 
         def y_params(seg, D):
-            mu = seg.x_mean
-            beta = seg.beta
+            # Only use signal dimensions
+            mu = seg.x_mean[:self.signal_d]
+            beta = seg.beta[:self.signal_d]
             alpha = seg.alpha
             tau = seg.tau
-            delta = seg.delta if seg.delta is not None else np.zeros(self.d)
+            delta = seg.delta[:self.signal_d] if seg.delta is not None else np.zeros(self.signal_d)
             # Mean includes interaction term: alpha + beta @ mu + tau * D + delta @ mu * D
             m_y = alpha + beta @ mu + tau * D + (delta @ mu) * D
             # Variance includes interaction term contributions
@@ -431,8 +441,11 @@ class PopulationSimulator:
 
 
     def compute_joint_overlap(self):
-        """Compute average Bhattacharyya coefficient of (x,y) distributions across true segments."""
-        Sigma = np.eye(self.d) * (self.signal_covariate_noise ** 2)
+        """Compute average Bhattacharyya coefficient of (x,y) distributions across true segments.
+        Only considers signal dimensions as disturbing features don't affect outcomes.
+        """
+        # Use signal_d dimensions for covariance
+        Sigma = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
         sigma = self.noise_std
         K = self.K
 
@@ -448,11 +461,12 @@ class PopulationSimulator:
             return float(np.exp(-BD))  # Bhattacharyya coefficient
 
         def mean_cov_for(seg, D):
-            mu = seg.x_mean
-            beta = seg.beta
+            # Only use signal dimensions
+            mu = seg.x_mean[:self.signal_d]
+            beta = seg.beta[:self.signal_d]
             alpha = seg.alpha
             tau = seg.tau
-            delta = seg.delta if seg.delta is not None else np.zeros(self.d)
+            delta = seg.delta[:self.signal_d] if seg.delta is not None else np.zeros(self.signal_d)
             # Mean of Y includes interaction: alpha + beta @ mu + tau * D + delta @ mu * D
             m_y = alpha + beta @ mu + tau * D + (delta @ mu) * D
             m = np.concatenate([mu, [m_y]])
@@ -482,6 +496,7 @@ class PopulationSimulator:
         """
         Compute normalized assignment ambiguity score (posterior entropy over segments).
         Returns a scalar in [0,1].
+        Only considers signal dimensions as disturbing features don't affect clustering.
         
         X: array (N,d) covariates
         D: array (N,) treatments {0,1}
@@ -491,23 +506,26 @@ class PopulationSimulator:
         D = np.array([cust.D_i for cust in self.pilot_customers])
         Y = np.array([cust.y for cust in self.pilot_customers])
         
-        N, d = X.shape
+        N = X.shape[0]
         K = self.K
-        Sigma = np.eye(d) * (self.signal_covariate_noise ** 2)
+        # Use signal_d dimensions for covariance
+        Sigma = np.eye(self.signal_d) * (self.signal_covariate_noise ** 2)
         Sigma_inv = np.linalg.inv(Sigma)
         logdet_Sigma = np.log(np.linalg.det(Sigma))
         sigma2 = self.noise_std ** 2
 
-        # Precompute segment params
-        mus = [seg.x_mean for seg in self.true_segments]
+        # Precompute segment params (only signal dimensions)
+        mus = [seg.x_mean[:self.signal_d] for seg in self.true_segments]
         alphas = [seg.alpha for seg in self.true_segments]
-        betas = [seg.beta for seg in self.true_segments]
+        betas = [seg.beta[:self.signal_d] for seg in self.true_segments]
         taus = [seg.tau for seg in self.true_segments]
-        deltas = [seg.delta if seg.delta is not None else np.zeros(d) for seg in self.true_segments]
+        deltas = [seg.delta[:self.signal_d] if seg.delta is not None else np.zeros(self.signal_d) 
+                  for seg in self.true_segments]
 
         total_entropy = 0.0
         for i in range(N):
-            x = X[i]
+            # Only use signal dimensions of x
+            x = X[i, :self.signal_d]
             d_i = D[i]
             y = Y[i]
 
@@ -519,9 +537,9 @@ class PopulationSimulator:
                 tau = taus[k]
                 delta = deltas[k]
 
-                # log p(x | Z=k)
+                # log p(x | Z=k) - only signal dimensions
                 dx = x - mu
-                llx = -0.5 * (d * np.log(2*np.pi) + logdet_Sigma + dx @ Sigma_inv @ dx)
+                llx = -0.5 * (self.signal_d * np.log(2*np.pi) + logdet_Sigma + dx @ Sigma_inv @ dx)
 
                 # log p(y | x, D, Z=k) - includes interaction term
                 mean_y = alpha + beta @ x + tau * d_i + (delta @ x) * d_i
@@ -542,55 +560,98 @@ class PopulationSimulator:
         norm_entropy = avg_entropy / np.log(K)  # normalized to [0,1]
         return norm_entropy
 
-
-    def _generate_gamma_matrix(self, method):
+    
+    def compute_gamma_scores(self, method, train_customers, val_customers):
         """
-        Generate the doubly robust (DR) score matrix Gamma ∈ R^{N x 2} for each customer.
-        Gamma[i, 0] = DR estimate under control (a=0)
-        Gamma[i, 1] = DR estimate under treatment (a=1)
-        """
-        X = np.array([cust.x for cust in self.pilot_customers])
-        D = np.array([cust.D_i for cust in self.pilot_customers])
-        Y = np.array([cust.y for cust in self.pilot_customers])
+        Compute doubly robust (DR) scores for both training and validation customers.
         
-        X0, Y0 = X[D == 0], Y[D == 0]
-        X1, Y1 = X[D == 1], Y[D == 1]
+        Strategy:
+        1. Fit outcome models on TRAIN data
+        2. Predict and compute DR scores on both TRAIN and VAL data
+        
+        Parameters:
+        method : str
+            Method for computing gamma ('reg', 'mlp', or 'forest')
+        train_customers : list
+            Training customers
+        val_customers : list
+            Validation customers
+            
+        Returns:
+        Gamma_train : array-like, shape (N_train, 2)
+            DR scores for training customers
+        Gamma_val : array-like, shape (N_val, 2)
+            DR scores for validation customers
+        """
+        # Extract train data
+        X_train = np.array([cust.x for cust in train_customers])
+        D_train = np.array([cust.D_i for cust in train_customers])
+        Y_train = np.array([cust.y for cust in train_customers])
+        
+        X0_train, Y0_train = X_train[D_train == 0], Y_train[D_train == 0]
+        X1_train, Y1_train = X_train[D_train == 1], Y_train[D_train == 1]
+        
+        # Extract validation data
+        X_val = np.array([cust.x for cust in val_customers])
+        D_val = np.array([cust.D_i for cust in val_customers])
+        Y_val = np.array([cust.y for cust in val_customers])
+        
+        # Compute propensity score from training data
+        e = np.mean(D_train)  # Empirical treatment probability
+        print(f"  Propensity score e = {e:.3f} (from training data)")
 
         if method == "reg":
             model_0 = LinearRegression()
             model_1 = LinearRegression()
             
-            model_0.fit(X0, Y0)
-            model_1.fit(X1, Y1)
+            # Fit on TRAIN data
+            model_0.fit(X0_train, Y0_train)
+            model_1.fit(X1_train, Y1_train)
 
-            mu_0_hat = model_0.predict(X)
-            mu_1_hat = model_1.predict(X)
+            # Predict on TRAIN data
+            mu_0_hat_train = model_0.predict(X_train)
+            mu_1_hat_train = model_1.predict(X_train)
+            
+            gamma_1_train = mu_1_hat_train + (D_train / e) * (Y_train - mu_1_hat_train)
+            gamma_0_train = mu_0_hat_train + ((1 - D_train) / (1 - e)) * (Y_train - mu_0_hat_train)
+            Gamma_train = np.stack([gamma_0_train, gamma_1_train], axis=1)
 
-            e = 0.5  # Propensity score
+            # Predict on VALIDATION data
+            mu_0_hat_val = model_0.predict(X_val)
+            mu_1_hat_val = model_1.predict(X_val)
 
-            gamma_1 = mu_1_hat + (D / e) * (Y - mu_1_hat)
-            gamma_0 = mu_0_hat + ((1 - D) / (1 - e)) * (Y - mu_0_hat)
-
-            Gamma = np.stack([gamma_0, gamma_1], axis=1)
+            gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
+            gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
+            Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
         
-        if method == "forest":
+        elif method == "forest":
             with localconverter(default_converter + numpy2ri.converter):
-                X_r = ro.conversion.py2rpy(X)
-                Y_r = ro.conversion.py2rpy(Y)
-                D_r = ro.conversion.py2rpy(D)
-            ro.globalenv['Y'] = Y_r
-            ro.globalenv['D'] = D_r
-            Y_r = ro.r('as.numeric(Y)')
-            D_r = ro.r('as.numeric(D)')
+                X_train_r = ro.conversion.py2rpy(X_train)
+                Y_train_r = ro.conversion.py2rpy(Y_train)
+                D_train_r = ro.conversion.py2rpy(D_train)
+                
+            ro.globalenv['Y_train'] = Y_train_r
+            ro.globalenv['D_train'] = D_train_r
+            Y_train_r = ro.r('as.numeric(Y_train)')
+            D_train_r = ro.r('as.numeric(D_train)')
 
-            cforest = grf.causal_forest(X_r, Y_r, D_r)
-            Gamma_r = policytree.double_robust_scores(cforest)
-
+            # Fit causal forest on TRAIN data
+            cforest = grf.causal_forest(X_train_r, Y_train_r, D_train_r)
+            
+            # Predict on TRAIN data
+            Gamma_train_r = policytree.double_robust_scores(cforest)
             with localconverter(default_converter + numpy2ri.converter):
-                Gamma = ro.conversion.rpy2py(Gamma_r)
+                Gamma_train = ro.conversion.rpy2py(Gamma_train_r)
+            
+            # Predict on VALIDATION data
+            with localconverter(default_converter + numpy2ri.converter):
+                X_val_r = ro.conversion.py2rpy(X_val)
+                
+            Gamma_val_r = policytree.double_robust_scores(cforest, newdata=X_val_r)
+            with localconverter(default_converter + numpy2ri.converter):
+                Gamma_val = ro.conversion.rpy2py(Gamma_val_r)
 
-        
-        if method == "mlp":
+        elif method == "mlp":
             model_0 = MLPRegressor(
                 hidden_layer_sizes=(64, 32),
                 activation='relu',
@@ -602,20 +663,30 @@ class PopulationSimulator:
                 max_iter=10000,
             )
             
-            model_0.fit(X0, Y0)
-            model_1.fit(X1, Y1)
+            # Fit on TRAIN data
+            model_0.fit(X0_train, Y0_train)
+            model_1.fit(X1_train, Y1_train)
 
-            mu_0_hat = model_0.predict(X)
-            mu_1_hat = model_1.predict(X)
+            # Predict on TRAIN data
+            mu_0_hat_train = model_0.predict(X_train)
+            mu_1_hat_train = model_1.predict(X_train)
             
-            e = 0.5  # Propensity score
-
-            gamma_1 = mu_1_hat + (D / e) * (Y - mu_1_hat)
-            gamma_0 = mu_0_hat + ((1 - D) / (1 - e)) * (Y - mu_0_hat)
-
-            Gamma = np.stack([gamma_0, gamma_1], axis=1)
+            gamma_1_train = mu_1_hat_train + (D_train / e) * (Y_train - mu_1_hat_train)
+            gamma_0_train = mu_0_hat_train + ((1 - D_train) / (1 - e)) * (Y_train - mu_0_hat_train)
+            Gamma_train = np.stack([gamma_0_train, gamma_1_train], axis=1)
             
-        return Gamma
+            # Predict on VALIDATION data
+            mu_0_hat_val = model_0.predict(X_val)
+            mu_1_hat_val = model_1.predict(X_val)
+            
+            gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
+            gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
+            Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
+        
+        else:
+            raise ValueError(f"Unknown DR generation method: {method}")
+            
+        return Gamma_train, Gamma_val
 
 
     def split_pilot_customers_into_train_and_validate(self, train_frac=0.8):
@@ -626,6 +697,12 @@ class PopulationSimulator:
 
         self.train_customers = [self.pilot_customers[i] for i in self.train_idx]
         self.val_customers = [self.pilot_customers[i] for i in self.val_idx]
+        
+        # Compute gamma scores: fit on TRAIN, predict on both TRAIN and VAL
+        print(f"Computing gamma scores: fit on {len(self.train_customers)} train, predict on train and val")
+        self.gamma_train, self.gamma_val = self.compute_gamma_scores(
+            self.DR_generation_method, self.train_customers, self.val_customers
+        )
 
     def to_dataframe(self):
         data = []

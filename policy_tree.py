@@ -78,7 +78,7 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
     
     if use_hybrid_method:
         compute_gamma_in_policy_tree_R(X_r_tr, y_r_tr, D_r_tr, depth) # just to build the tree in R env
-        Gamma_tr = np.array(pop.gamma[[cust.customer_id for cust in pop.train_customers]])  # shape (N, 2)
+        Gamma_tr = pop.gamma_train  # Already computed in correct order (train customers)
     else:
         Gamma_tr = compute_gamma_in_policy_tree_R(X_r_tr, y_r_tr, D_r_tr, depth)
     
@@ -118,7 +118,7 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
     if len(pop.val_customers) > 0:
         assign_new_customers_to_pruned_tree(tree, pop, pop.val_customers, leaf_to_pruned_segment, algo)
         if use_hybrid_method is True:
-            Gamma_val = pop.gamma[[cust.customer_id for cust in pop.val_customers]]
+            Gamma_val = pop.gamma_val  # Already computed in correct order (val customers)
         else:
             Gamma_val = compute_gamma_in_policy_tree_R(X_r_val, y_r_val, D_r_val, depth)
         val_score = evaluate_on_validation(pop, algo=f"{algo}", Gamma_val=Gamma_val)
