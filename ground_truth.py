@@ -575,13 +575,13 @@ class PopulationSimulator:
         train_customers : list
             Training customers
         val_customers : list
-            Validation customers
+            Validation customers (can be empty)
             
         Returns:
         Gamma_train : array-like, shape (N_train, 2)
             DR scores for training customers
-        Gamma_val : array-like, shape (N_val, 2)
-            DR scores for validation customers
+        Gamma_val : array-like, shape (N_val, 2) or None
+            DR scores for validation customers (None if val_customers is empty)
         """
         # Extract train data
         X_train = np.array([cust.x for cust in train_customers])
@@ -591,10 +591,15 @@ class PopulationSimulator:
         X0_train, Y0_train = X_train[D_train == 0], Y_train[D_train == 0]
         X1_train, Y1_train = X_train[D_train == 1], Y_train[D_train == 1]
         
-        # Extract validation data
-        X_val = np.array([cust.x for cust in val_customers])
-        D_val = np.array([cust.D_i for cust in val_customers])
-        Y_val = np.array([cust.y for cust in val_customers])
+        # Extract validation data (handle empty case)
+        if len(val_customers) > 0:
+            X_val = np.array([cust.x for cust in val_customers])
+            D_val = np.array([cust.D_i for cust in val_customers])
+            Y_val = np.array([cust.y for cust in val_customers])
+        else:
+            X_val = None
+            D_val = None
+            Y_val = None
         
         # Compute propensity score from training data
         e = np.mean(D_train)  # Empirical treatment probability
@@ -616,13 +621,16 @@ class PopulationSimulator:
             gamma_0_train = mu_0_hat_train + ((1 - D_train) / (1 - e)) * (Y_train - mu_0_hat_train)
             Gamma_train = np.stack([gamma_0_train, gamma_1_train], axis=1)
 
-            # Predict on VALIDATION data
-            mu_0_hat_val = model_0.predict(X_val)
-            mu_1_hat_val = model_1.predict(X_val)
+            # Predict on VALIDATION data (if validation set exists)
+            if X_val is not None and len(X_val) > 0:
+                mu_0_hat_val = model_0.predict(X_val)
+                mu_1_hat_val = model_1.predict(X_val)
 
-            gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
-            gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
-            Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
+                gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
+                gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
+                Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
+            else:
+                Gamma_val = None
         
         elif method == "forest":
             with localconverter(default_converter + numpy2ri.converter):
@@ -643,13 +651,16 @@ class PopulationSimulator:
             with localconverter(default_converter + numpy2ri.converter):
                 Gamma_train = ro.conversion.rpy2py(Gamma_train_r)
             
-            # Predict on VALIDATION data
-            with localconverter(default_converter + numpy2ri.converter):
-                X_val_r = ro.conversion.py2rpy(X_val)
-                
-            Gamma_val_r = policytree.double_robust_scores(cforest, newdata=X_val_r)
-            with localconverter(default_converter + numpy2ri.converter):
-                Gamma_val = ro.conversion.rpy2py(Gamma_val_r)
+            # Predict on VALIDATION data (if validation set exists)
+            if X_val is not None and len(X_val) > 0:
+                with localconverter(default_converter + numpy2ri.converter):
+                    X_val_r = ro.conversion.py2rpy(X_val)
+                    
+                Gamma_val_r = policytree.double_robust_scores(cforest, newdata=X_val_r)
+                with localconverter(default_converter + numpy2ri.converter):
+                    Gamma_val = ro.conversion.rpy2py(Gamma_val_r)
+            else:
+                Gamma_val = None
 
         elif method == "mlp":
             model_0 = MLPRegressor(
@@ -675,13 +686,16 @@ class PopulationSimulator:
             gamma_0_train = mu_0_hat_train + ((1 - D_train) / (1 - e)) * (Y_train - mu_0_hat_train)
             Gamma_train = np.stack([gamma_0_train, gamma_1_train], axis=1)
             
-            # Predict on VALIDATION data
-            mu_0_hat_val = model_0.predict(X_val)
-            mu_1_hat_val = model_1.predict(X_val)
-            
-            gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
-            gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
-            Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
+            # Predict on VALIDATION data (if validation set exists)
+            if X_val is not None and len(X_val) > 0:
+                mu_0_hat_val = model_0.predict(X_val)
+                mu_1_hat_val = model_1.predict(X_val)
+                
+                gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
+                gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
+                Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
+            else:
+                Gamma_val = None
         
         else:
             raise ValueError(f"Unknown DR generation method: {method}")
@@ -698,11 +712,20 @@ class PopulationSimulator:
         self.train_customers = [self.pilot_customers[i] for i in self.train_idx]
         self.val_customers = [self.pilot_customers[i] for i in self.val_idx]
         
-        # Compute gamma scores: fit on TRAIN, predict on both TRAIN and VAL
-        print(f"Computing gamma scores: fit on {len(self.train_customers)} train, predict on train and val")
-        self.gamma_train, self.gamma_val = self.compute_gamma_scores(
-            self.DR_generation_method, self.train_customers, self.val_customers
-        )
+        # Compute gamma scores
+        if train_frac < 1.0:
+            # Normal case: have both train and val
+            print(f"Computing gamma scores: fit on {len(self.train_customers)} train, predict on train and val")
+            self.gamma_train, self.gamma_val = self.compute_gamma_scores(
+                self.DR_generation_method, self.train_customers, self.val_customers
+            )
+        else:
+            # train_frac=1.0: all data is training, no validation
+            # Still compute gamma_train (some algorithms need it), but gamma_val = None
+            print(f"train_frac=1.0: Computing gamma only for training data")
+            self.gamma_train, self.gamma_val = self.compute_gamma_scores(
+                self.DR_generation_method, self.train_customers, []  # Empty val_customers
+            )
 
     def to_dataframe(self):
         data = []
