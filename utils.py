@@ -241,7 +241,7 @@ def pick_M_for_algo(algo, df_results_M):
     max_val_algos = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", 
                      "dast", "mst", "kmeans-standard"]
     min_val_algos = ["gmm-standard", "clr-standard"]
-    meta_learners = ["t_learner", "s_learner", "x_learner", "dr_learner"]
+    meta_learners = ["t_learner", "s_learner", "x_learner", "dr_learner", "causal_forest"]
     
     if algo not in max_val_algos and algo not in min_val_algos and algo not in meta_learners:
         raise ValueError(f"Unknown algorithm: {algo}")

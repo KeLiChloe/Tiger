@@ -552,14 +552,22 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth,
         "Gamma": pop.gamma_train
     }
     
-    # Generate candidate thresholds (midpoints between unique values)
+    # Generate candidate thresholds using quantile-based binning
+    # Use B bins to reduce computational cost
+    B = 200  # Number of bins 
     H = {}
     for j in range(data_train["X"].shape[1]):
         sorted_values = np.sort(np.unique(data_train["X"][:, j]))
-        if len(sorted_values) > 1:
+        N_unique = len(sorted_values)
+        
+        if N_unique <= 1:
+            H[j] = sorted_values
+        elif N_unique <= B:
             H[j] = (sorted_values[:-1] + sorted_values[1:]) / 2.0
         else:
-            H[j] = sorted_values
+            quantile_indices = [int(np.floor(k / B * N_unique)) for k in range(1, B)]
+            quantile_indices = sorted(set([min(idx, N_unique - 1) for idx in quantile_indices]))
+            H[j] = sorted_values[quantile_indices]
     
     
     # Build tree

@@ -19,7 +19,8 @@ ALGORITHMS = ["kmeans-standard", "kmeans-da",
               "t_learner",
               "x_learner",
               "s_learner",
-              "dr_learner"]
+              "dr_learner",
+              "causal_forest"]
 
 grf = importr('grf')
 policytree = importr('policytree')

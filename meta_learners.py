@@ -1,6 +1,8 @@
 import numpy as np
 from utils import assign_trained_customers_to_segments
 from ground_truth import PopulationSimulator, SegmentEstimate
+from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import LogisticRegression
 
 def T_learner(implement_customers, x_mat, D_vec, y_vec):
     """
@@ -62,23 +64,35 @@ def T_learner(implement_customers, x_mat, D_vec, y_vec):
     
     # Recommend action with highest predicted outcome
     seg_labels_impl = np.argmax(mu_mat_impl, axis=1).astype(int)
-    action_identity = np.arange(len(mu_pilot_models), dtype=int)
+    # Use unique_actions instead of np.arange to handle non-consecutive actions
+    action_identity = unique_actions.astype(int)
     
     return seg_labels_impl, action_identity
     
 
 def _build_mu_matrix(mu_models, X_impl):
+    """
+    Build matrix of predicted outcomes for each action.
+    
+    Returns:
+    mu_mat : array, shape (n, n_actions)
+        mu_mat[:, i] contains predictions for action i (using enumeration index, not action value)
+    """
     n = X_impl.shape[0]
-    mu_mat = np.zeros((n, len(mu_models)), dtype=float)
-    for a, model in mu_models.items():
-        a_int = int(a)
+    n_actions = len(mu_models)
+    mu_mat = np.zeros((n, n_actions), dtype=float)
+    
+    # Sort actions to ensure consistent column ordering
+    sorted_actions = sorted(mu_models.keys())
+    for i, action in enumerate(sorted_actions):
+        model = mu_models[action]
         pred = model.predict(X_impl)
-        mu_mat[:, a_int] = pred
+        mu_mat[:, i] = pred
 
     return mu_mat
 
 
-def X_learner(implement_customers, x_mat, D_vec, y_vec, propensity_scores=None):
+def X_learner(implement_customers, x_mat, D_vec, y_vec):
     """
     X-Learner implementation using neural networks.
     Supports multiple actions (multi-arm treatment).
@@ -243,7 +257,8 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec, propensity_scores=None):
     
     # Recommend action with highest predicted outcome
     seg_labels_impl = np.argmax(outcome_matrix, axis=1).astype(int)
-    action_identity = np.arange(n_actions, dtype=int)
+    # Use unique_actions instead of np.arange to handle non-consecutive actions
+    action_identity = unique_actions.astype(int)
     
     
     return seg_labels_impl, action_identity
@@ -330,6 +345,201 @@ def S_learner(implement_customers, x_mat, D_vec, y_vec):
     
     # Recommend action with highest predicted outcome
     seg_labels_impl = np.argmax(mu_mat_impl, axis=1).astype(int)
-    action_identity = np.arange(n_actions, dtype=int)
+    # Use unique_actions instead of np.arange to handle non-consecutive actions
+    action_identity = unique_actions.astype(int)
     
+    return seg_labels_impl, action_identity
+
+
+def DR_learner(implement_customers, x_mat, D_vec, y_vec):
+    """
+    DR-Learner (Doubly Robust Learner) implementation.
+    Supports multiple actions (multi-arm treatment).
+    
+    DR-learner combines outcome regression and propensity score weighting to create
+    a doubly robust estimator. It's robust to misspecification of either the outcome
+    model or the propensity model (but not both).
+    
+    Algorithm (for binary treatment):
+    Step 1: Nuisance training
+        (a) Estimate propensity scores π̂(x) = P(D=1|X=x)
+        (b) Estimate outcome models μ̂_a(x) = E[Y|X=x, D=a] for each action a
+    
+    Step 2: Pseudo-outcome regression
+        Construct pseudo-outcome: φ̂(Z) = [A - π̂(X)] / [π̂(X){1 - π̂(X)}] {Y - μ̂_A(X)} + μ̂_1(X) - μ̂_0(X)
+        Estimate CATE: τ̂(x) = E[φ̂(Z) | X=x]
+    
+    For multi-arm treatment:
+    - Uses action 0 as baseline
+    - For each action a, estimates τ̂_a(x) = E[Y(a) - Y(0) | X=x]
+    
+    Parameters:
+    implement_customers : list
+        List of implementation customers.
+    x_mat : array-like, shape (n_samples, n_features)
+        Feature matrix from training data.
+    D_vec : array-like, shape (n_samples,)
+        Action/treatment assignment vector.
+    y_vec : array-like, shape (n_samples,)
+        Outcome vector from training data.
+        
+    Returns:
+    seg_labels_impl : array-like, shape (n_impl_samples,)
+        Recommended action for each implementation customer.
+    action_identity : array-like, shape (n_actions,)
+        Action identity mapping.
+    """
+    
+    # Identify unique actions
+    unique_actions = np.unique(D_vec)
+    n_actions = len(unique_actions)    
+    # Get implementation customer features
+    X_impl = np.array([cust.x for cust in implement_customers])
+    n_impl = X_impl.shape[0]
+    
+    if n_actions == 2:
+        
+        # Step 1a: Estimate propensity scores π̂(x) = P(D=1|X=x)
+        propensity_model = LogisticRegression(max_iter=1000, random_state=42)
+        propensity_model.fit(x_mat, D_vec)
+        pi_hat = propensity_model.predict_proba(x_mat)[:, 1]  # P(D=1|X)
+        
+        # Clip propensity scores to avoid division by zero
+        pi_hat = np.clip(pi_hat, 0.01, 0.99)
+        
+        # Step 1b: Estimate outcome models μ̂_a(x) for each action
+        mu_models = {}
+        for action in unique_actions:
+            X_a = x_mat[D_vec == action]
+            Y_a = y_vec[D_vec == action]
+            
+            if len(X_a) == 0:
+                print(f"    Warning: No samples for action {action}")
+                continue
+            
+            model_a = MLPRegressor(
+                hidden_layer_sizes=(32,),
+                activation='relu',
+                max_iter=2000,
+                early_stopping=True,
+                random_state=42
+            )
+            model_a.fit(X_a, Y_a)
+            mu_models[int(action)] = model_a
+        
+        # Predict μ̂_0(x) and μ̂_1(x) for training data
+        mu_0 = mu_models[0].predict(x_mat)
+        mu_1 = mu_models[1].predict(x_mat)
+        
+        # Get μ̂_A(x) - the predicted outcome under observed action
+        mu_A = np.where(D_vec == 1, mu_1, mu_0)
+        
+        # Step 2: Construct pseudo-outcome φ̂(Z)
+        # φ̂(Z) = [A - π̂(X)] / [π̂(X){1 - π̂(X)}] {Y - μ̂_A(X)} + μ̂_1(X) - μ̂_0(X)
+        ipw_weight = (D_vec - pi_hat) / (pi_hat * (1 - pi_hat))
+        pseudo_outcome = ipw_weight * (y_vec - mu_A) + (mu_1 - mu_0)
+        
+        # Step 3: Regress pseudo-outcome on X to get CATE estimate
+        cate_model = MLPRegressor(
+            hidden_layer_sizes=(32,),
+            activation='relu',
+            max_iter=2000,
+            early_stopping=True,
+            random_state=42
+        )
+        cate_model.fit(x_mat, pseudo_outcome)
+        
+        # Predict treatment effect for implementation customers
+        tau_hat = cate_model.predict(X_impl)
+        
+        # Recommend action: treatment if τ̂(x) ≥ 0, control otherwise
+        seg_labels_impl = (tau_hat >= 0).astype(int)
+        action_identity = unique_actions.astype(int)
+
+    else:
+        # ========== Multi-arm treatment case ==========
+        
+        # Check if action 0 exists (needed as baseline)
+        if 0 not in unique_actions:
+            raise ValueError("DR-learner requires action 0 as baseline for multi-arm treatment")
+        
+        outcome_matrix = np.zeros((n_impl, n_actions))
+        
+        # Step 1b: Train outcome models for all actions
+        mu_models = {}
+        for action in unique_actions:
+            X_a = x_mat[D_vec == action]
+            Y_a = y_vec[D_vec == action]
+            
+            if len(X_a) == 0:
+                print(f"    Warning: No samples for action {action}")
+                continue
+            
+            model_a = MLPRegressor(
+                hidden_layer_sizes=(32,),
+                activation='relu',
+                max_iter=2000,
+                early_stopping=True,
+                random_state=42
+            )
+            model_a.fit(X_a, Y_a)
+            mu_models[int(action)] = model_a
+        
+        # Predict baseline outcome for implementation customers
+        mu_0_impl = mu_models[0].predict(X_impl)
+        outcome_matrix[:, 0] = mu_0_impl
+        
+        # For each non-baseline action, estimate treatment effect using DR
+        for i, action in enumerate(unique_actions):
+            if action == 0:
+                continue  # Already handled baseline
+            
+            # Create binary problem: action a vs baseline 0
+            mask = (D_vec == action) | (D_vec == 0)
+            X_binary = x_mat[mask]
+            Y_binary = y_vec[mask]
+            D_binary = (D_vec[mask] == action).astype(float)
+            
+            if len(X_binary) == 0 or np.sum(D_binary == 1) == 0:
+                print(f"    Warning: No samples for action {action}, using baseline")
+                outcome_matrix[:, i] = outcome_matrix[:, 0]
+                continue
+            
+            # Step 1a: Estimate propensity scores for this binary problem
+            propensity_model_a = LogisticRegression(max_iter=1000, random_state=42)
+            propensity_model_a.fit(X_binary, D_binary)
+            pi_hat_a = propensity_model_a.predict_proba(X_binary)[:, 1]
+            pi_hat_a = np.clip(pi_hat_a, 0.01, 0.99)
+            
+            # Predict outcomes under both actions for this subset
+            mu_0_binary = mu_models[0].predict(X_binary)
+            mu_a_binary = mu_models[int(action)].predict(X_binary)
+            
+            # Get μ̂_D(x) - predicted outcome under observed action
+            mu_D = np.where(D_binary == 1, mu_a_binary, mu_0_binary)
+            
+            # Step 2: Construct pseudo-outcome
+            ipw_weight = (D_binary - pi_hat_a) / (pi_hat_a * (1 - pi_hat_a))
+            pseudo_outcome_a = ipw_weight * (Y_binary - mu_D) + (mu_a_binary - mu_0_binary)
+            
+            # Step 3: Regress pseudo-outcome on X
+            cate_model_a = MLPRegressor(
+                hidden_layer_sizes=(32,),
+                activation='relu',
+                max_iter=2000,
+                early_stopping=True,
+                random_state=42
+            )
+            cate_model_a.fit(X_binary, pseudo_outcome_a)
+            
+            # Predict treatment effect for implementation customers
+            tau_a_impl = cate_model_a.predict(X_impl)
+            
+            # Predicted outcome = baseline + treatment effect
+            outcome_matrix[:, i] = mu_0_impl + tau_a_impl
+        
+        # Recommend action with highest predicted outcome
+        seg_labels_impl = np.argmax(outcome_matrix, axis=1).astype(int)
+        action_identity = unique_actions.astype(int)
+        
     return seg_labels_impl, action_identity

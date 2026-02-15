@@ -250,11 +250,28 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
     }
     
     
-    # candidate thresholds for each feature
-    H = {
-        j: np.linspace(data_train["X"][:, j].min()-2, data_train["X"][:, j].max()+2, threshold_grid)
-        for j in range(data_train["X"].shape[1])
-    }
+    # Generate candidate thresholds using quantile-based binning
+    # Use B bins to reduce computational cost
+    B = threshold_grid if threshold_grid > 0 else 20  # Use threshold_grid as number of bins
+    H = {}
+    for j in range(data_train["X"].shape[1]):
+        sorted_values = np.sort(np.unique(data_train["X"][:, j]))
+        N_unique = len(sorted_values)
+        
+        if N_unique <= 1:
+            # Only one unique value, use it as threshold
+            H[j] = sorted_values
+        elif N_unique <= B:
+            # Few unique values, use all midpoints
+            H[j] = (sorted_values[:-1] + sorted_values[1:]) / 2.0
+        else:
+            # Many unique values, use quantile-based binning
+            # Define indices for k/B quantiles: l_k = floor(k/B * N_unique)
+            quantile_indices = [int(np.floor(k / B * N_unique)) for k in range(1, B)]
+            # Remove duplicates and ensure valid indices
+            quantile_indices = sorted(set([min(idx, N_unique - 1) for idx in quantile_indices]))
+            # Get threshold values at these quantiles
+            H[j] = sorted_values[quantile_indices]
     
     # Build MST
     tree = MSTree(
