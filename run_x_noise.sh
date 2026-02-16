@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# ===== 参数配置 =====
 SAVE_DIR="exp_feb_2026/varying_X_noise"
 mkdir -p "$SAVE_DIR"
 
-# ===== 实验循环 =====
-# X_noise_std_scale: 0.05 -> 0.50 step 0.05
-for X_NOISE in $(seq 0.05 0.1 1.05); do
-    X_TAG=$(printf "%03d" "$(echo "$X_NOISE * 100" | bc | cut -d'.' -f1)")
+# 用整数循环避免浮点精度问题
+for X_INT in $(seq 5 10 105); do
+
+    X_NOISE=$(awk "BEGIN {printf \"%.2f\", $X_INT/100}")
+    X_TAG=$(printf "%03d" "$X_INT")
 
     echo "🚀 Running experiment with X_noise_std_scale=${X_NOISE} ..."
 
