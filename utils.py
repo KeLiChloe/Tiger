@@ -229,41 +229,41 @@ def assign_new_customers_to_segments(pop: PopulationSimulator, customers, model,
 
 
 def pick_M_for_algo(algo, df_results_M):
-    """
-    Select optimal M for algorithm based on validation score.
-    
-    Tie-breaking rule: When multiple M have the same validation score,
-    - For DAST: Select M with smallest within-cluster variance (prefer more homogeneous segments)
-    - For other algorithms: Select smallest M (Occam's Razor)
-    """
-        
+
     val_col = f'{algo}_val'
+
     max_val_algos = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", 
                      "dast", "mst", "kmeans-standard"]
     min_val_algos = ["gmm-standard", "clr-standard"]
-    meta_learners = ["t_learner", "s_learner", "x_learner", "dr_learner", "causal_forest"]
-    
+    meta_learners = ["t_learner", "s_learner", "x_learner", 
+                     "dr_learner", "causal_forest"]
+
     if algo not in max_val_algos and algo not in min_val_algos and algo not in meta_learners:
         raise ValueError(f"Unknown algorithm: {algo}")
-    
+
     is_maximize = algo in max_val_algos
     is_minimize = algo in min_val_algos
     is_meta_learner = algo in meta_learners
-    
-    # Find all M with best validation score
+
     if is_maximize:
         best_score = df_results_M[val_col].max()
         candidates = df_results_M[df_results_M[val_col] == best_score].copy()
-        picked_M = int(candidates['M'].min()) # Tie-breaking: Always select smallest M (Occam's Razor - prefer simpler models)
+
+        if algo == "dast":
+            picked_M = int(candidates["M"].max())  
+        else:
+            picked_M = int(candidates["M"].min())
+
     elif is_minimize:
         best_score = df_results_M[val_col].min()
         candidates = df_results_M[df_results_M[val_col] == best_score].copy()
-        picked_M = int(candidates['M'].min()) # Tie-breaking: Always select smallest M (Occam's Razor - prefer simpler models)
+        picked_M = int(candidates["M"].min())
+
     elif is_meta_learner:
         picked_M = "Not applicable"
-    
 
     return {f'{algo}_picked_M': picked_M}
+
 
 
 

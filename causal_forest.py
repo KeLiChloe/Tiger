@@ -21,7 +21,7 @@ from econml.dml import CausalForestDML
 
 
 def causal_forest_predict(implement_customers, x_mat, D_vec, y_vec, 
-                          n_estimators=8, n_estimators_nuisance=8, 
+                          n_estimators=12, n_estimators_nuisance=12, 
                           min_samples_leaf=5, max_depth=None):
     """
     Causal Forest implementation using econml's CausalForestDML.
