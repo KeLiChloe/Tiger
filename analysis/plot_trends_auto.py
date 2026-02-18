@@ -399,9 +399,14 @@ def plot_from_csv(
 
     ORDER = [
         "gmm-standard",
-        "kmeans-standard",
-        "mst", "clr-standard", "t_learner", "s_learner", "x_learner", "dr_learner", 
-        "causal_forest",
+        # "kmeans-standard",
+        # "mst", 
+        # "clr-standard", 
+        # "t_learner", 
+        # "s_learner", 
+        # "x_learner", 
+        # "dr_learner", 
+        # "causal_forest",
         #"policy_tree",
     ]
     comps_present = list(df["comparator"].unique())
@@ -449,12 +454,23 @@ def plot_from_csv(
     ax.grid(True, axis="y")
     ax.grid(False, axis="x")
 
-    ax.minorticks_on()
-    ax.tick_params(which="minor", length=3, width=0.6)
+    # ax.minorticks_on()
+    # ax.tick_params(which="minor", length=3, width=0.6)
 
     unique_x = sorted(df["param_value"].dropna().unique())
+
+    MAX_TICKS = 20
+
     if len(unique_x) > 0 and np.all(np.isfinite(unique_x)):
-        ax.set_xticks(unique_x)
+        if len(unique_x) <= MAX_TICKS:
+            ticks = unique_x
+        else:
+            idx = np.linspace(0, len(unique_x) - 1, MAX_TICKS, dtype=int)
+            ticks = [unique_x[i] for i in idx]
+
+        ax.set_xticks(ticks)
+        ax.xaxis.set_major_formatter(mpl.ticker.FormatStrFormatter('%.2g'))
+
 
     ymin, ymax = ax.get_ylim()
     if np.isfinite(ymin) and np.isfinite(ymax) and ymax > ymin:
