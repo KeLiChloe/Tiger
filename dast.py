@@ -567,7 +567,8 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth,
         else:
             quantile_indices = [int(np.floor(k / B * N_unique)) for k in range(1, B)]
             quantile_indices = sorted(set([min(idx, N_unique - 1) for idx in quantile_indices]))
-            H[j] = sorted_values[quantile_indices]
+            quantile_values = sorted_values[quantile_indices]
+            H[j] = (quantile_values[:-1] + quantile_values[1:]) / 2.0
     
     
     # Build tree
