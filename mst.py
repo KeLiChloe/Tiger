@@ -258,12 +258,9 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
         sorted_values = np.sort(np.unique(data_train["X"][:, j]))
         N_unique = len(sorted_values)
         
-        if N_unique <= 1:
-            # Only one unique value, use it as threshold
+        if N_unique <= B:
+            # Few unique values, use them directly as thresholds
             H[j] = sorted_values
-        elif N_unique <= B:
-            # Few unique values, use all midpoints
-            H[j] = (sorted_values[:-1] + sorted_values[1:]) / 2.0
         else:
             # Many unique values, use quantile-based binning
             # Define indices for k/B quantiles: l_k = floor(k/B * N_unique)
