@@ -9,11 +9,18 @@ import random
 
 
 
-def compute_residual_value(X, Y, D, indices, include_interactions):
+def compute_residual_value(X, Y, D, indices, include_interactions, action_num=None):
     # Subset the data
     X_m = X[indices]
     D_m = D[indices].reshape(-1, 1)
     Y_m = Y[indices].reshape(-1, 1)
+    
+    # Strict check: all actions 0..action_num-1 must be present
+    if action_num is not None:
+        unique_actions_in_data = np.unique(D_m)
+        for a in range(action_num):
+            if a not in unique_actions_in_data:
+                return np.inf
 
     # Construct the design matrix: [intercept | X | D]
     X_design = build_design_matrix(X_m, D_m, include_interactions)
@@ -49,7 +56,7 @@ class MSTNode:
         self.is_leaf = True
 
 class MSTree:
-    def __init__(self, x, y, D, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo):
+    def __init__(self, x, y, D, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo, action_num=None):
         self.x = x
         self.y = y
         self.D = D
@@ -62,6 +69,7 @@ class MSTree:
         self.leaf_nodes = []
         
         self.algo = algo
+        self.action_num = action_num
 
 
     def build(self, include_interactions):
@@ -125,7 +133,7 @@ class MSTree:
 
     def _grow_node(self, indices, depth, include_interactions):
         node = MSTNode(indices, depth)
-        node.value = compute_residual_value(self.x, self.y, self.D, indices, include_interactions)
+        node.value = compute_residual_value(self.x, self.y, self.D, indices, include_interactions, self.action_num)
 
         if depth == self.max_depth:
             self.leaf_nodes.append(node)
@@ -140,8 +148,8 @@ class MSTree:
                 right_idx = indices[self.x[indices, j] > t]
 
                 if self._check_leaf_constraints(left_idx) and self._check_leaf_constraints(right_idx):
-                    left_val = compute_residual_value(self.x, self.y, self.D, left_idx, include_interactions)
-                    right_val = compute_residual_value(self.x, self.y, self.D, right_idx, include_interactions)
+                    left_val = compute_residual_value(self.x, self.y, self.D, left_idx, include_interactions, self.action_num)
+                    right_val = compute_residual_value(self.x, self.y, self.D, right_idx, include_interactions, self.action_num)
                     gain = node.value - (left_val + right_val)
                     valid_splits.append((gain, j, t, left_idx, right_idx))
 
@@ -172,10 +180,15 @@ class MSTree:
 
     
     def _check_leaf_constraints(self, indices):
+        """Check if leaf has minimum required samples for ALL possible actions."""
         D_sub = self.D[indices]
-        n1 = np.sum(D_sub == 1)
-        n0 = np.sum(D_sub == 0)
-        return (n1 >= self.min_leaf_size) and (n0 >= self.min_leaf_size)
+        
+        # STRICT: All actions 0..action_num-1 must each have at least min_leaf_size samples
+        for a in range(self.action_num):
+            if np.sum(D_sub == a) < self.min_leaf_size:
+                return False
+        
+        return True
 
     
     def _get_leaf_nodes(self):
@@ -229,12 +242,8 @@ class MSTree:
         X_seg = data['X'][indices]
         D_seg = data['D'][indices]
         Y_seg = data['Y'][indices]
-        if include_interactions:
-            est_alpha, est_beta, est_tau, est_action, est_delta = estimate_segment_parameters(X_seg, D_seg, Y_seg, include_interactions)
-            segment = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id, est_delta=est_delta)
-        else:
-            est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg, include_interactions)
-            segment = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id)
+        est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg, include_interactions, self.action_num)
+        segment = SegmentEstimate(est_tau, est_action, segment_id)
         for i in indices:
             customers[i].est_segment[f"{self.algo}"] = segment
         return segment
@@ -280,6 +289,7 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
         epsilon=epsilon,
         max_depth=max_depth,
         algo=algo,
+        action_num=pop.action_num
     )
     tree.build(include_interactions)
     

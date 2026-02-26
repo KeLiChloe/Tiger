@@ -57,14 +57,14 @@ def compute_gamma_in_policy_tree_R(X_r, y_r, D_r, depth):
         Gamma = ro.conversion.rpy2py(Gamma_r)
     return Gamma
 
-def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, target_leaf_num: int, x_mat_tr, D_vec_tr, y_vec_tr, x_mat_val, D_vec_val, y_vec_val, include_interactions, use_hybrid_method):
+def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, target_leaf_num: int, x_mat_tr, D_vec_tr, y_vec_tr, x_mat_val=None, D_vec_val=None, y_vec_val=None, include_interactions=False, use_hybrid_method=False):
     """
     Perform policy tree-based segmentation and OLS-based estimation per segment.
 
     Parameters:
         pop: PopulationSimulator object with simulated data
         depth: maximum depth of the policy tree
-        random_state: optional random seed for reproducibility
+        x_mat_val, D_vec_val, y_vec_val: optional validation data (None if no val set)
     """
     
     with localconverter(default_converter + numpy2ri.converter):
@@ -72,9 +72,12 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
         y_r_tr = ro.conversion.py2rpy(y_vec_tr)
         D_r_tr = ro.conversion.py2rpy(D_vec_tr)
         
-        X_r_val = ro.conversion.py2rpy(x_mat_val)
-        y_r_val = ro.conversion.py2rpy(y_vec_val)
-        D_r_val = ro.conversion.py2rpy(D_vec_val)
+        if x_mat_val is not None:
+            X_r_val = ro.conversion.py2rpy(x_mat_val)
+            y_r_val = ro.conversion.py2rpy(y_vec_val)
+            D_r_val = ro.conversion.py2rpy(D_vec_val)
+        else:
+            X_r_val = y_r_val = D_r_val = None
     
     if use_hybrid_method:
         compute_gamma_in_policy_tree_R(X_r_tr, y_r_tr, D_r_tr, depth) # just to build the tree in R env
@@ -106,7 +109,8 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
         Gamma_tr=Gamma_tr,
         target_leaf_num=target_leaf_num,
         leaf_to_parent_map=leaf_to_parent_map,
-        use_hybrid_method=use_hybrid_method
+        use_hybrid_method=use_hybrid_method,
+        action_num=pop.action_num
     )
 
     # Assign each train customer to estimated segment
@@ -115,7 +119,7 @@ def policy_tree_segment_and_estimate(pop: PopulationSimulator, depth: int, targe
 
     # assign validation customers to segments
     val_score = None
-    if len(pop.val_customers) > 0:
+    if len(pop.val_customers) > 0 and x_mat_val is not None:
         assign_new_customers_to_pruned_tree(tree, pop, pop.val_customers, leaf_to_pruned_segment, algo)
         if use_hybrid_method is True:
             Gamma_val = pop.gamma_val  # Already computed in correct order (val customers)
@@ -150,17 +154,11 @@ def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segme
         D_m = D_vec[idx_m]
         y_m = y_vec[idx_m]
 
-        if include_interactions:
-            est_alpha, est_beta, est_tau, _, est_delta = estimate_segment_parameters(x_m, D_m, y_m, include_interactions)
-        else:
-            est_alpha, est_beta, est_tau, _ = estimate_segment_parameters(x_m, D_m, y_m, include_interactions)
+        est_tau, _ = estimate_segment_parameters(x_m, D_m, y_m, include_interactions, pop.action_num)
         
         est_action = action_ids[idx_m[0]]
         assert np.all(action_ids[idx_m] == action_ids[idx_m[0]]), "Inconsistent actions within segment"
-        if include_interactions:
-            est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m, est_delta=est_delta)
-        else:
-            est_seg = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id=m)
+        est_seg = SegmentEstimate(est_tau, est_action, segment_id=m)
         pop.est_segments_list[f"{algo}"].append(est_seg)
     
     assign_trained_customers_to_segments(pop, segment_labels, f"{algo}")
@@ -168,7 +166,7 @@ def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segme
 import numpy as np
 from itertools import combinations
 
-def post_prune_tree(Y, D, segment_labels, action_ids, Gamma_tr, target_leaf_num, leaf_to_parent_map, use_hybrid_method):
+def post_prune_tree(Y, D, segment_labels, action_ids, Gamma_tr, target_leaf_num, leaf_to_parent_map, use_hybrid_method, action_num=None):
     """
     Prune only sibling leaf segments (same parent in tree structure).
 
@@ -219,13 +217,13 @@ def post_prune_tree(Y, D, segment_labels, action_ids, Gamma_tr, target_leaf_num,
             merged_idx = np.concatenate([idx1, idx2])
 
             # Choose the action that maximizes merged welfare
-            merged_node_value  = compute_node_DR_value(Y, D, Gamma_tr, merged_idx, use_hybrid_method)
+            merged_node_value  = compute_node_DR_value(Y, D, Gamma_tr, merged_idx, use_hybrid_method, action_num)
             merged_node_action = np.argmax(Gamma_tr[merged_idx].mean(axis=0))
 
 
             # Original welfare = sum of each segment's welfare under its own action
-            w1 = compute_node_DR_value(Y, D, Gamma_tr, idx1, use_hybrid_method)
-            w2 = compute_node_DR_value(Y, D, Gamma_tr, idx2, use_hybrid_method)
+            w1 = compute_node_DR_value(Y, D, Gamma_tr, idx1, use_hybrid_method, action_num)
+            w2 = compute_node_DR_value(Y, D, Gamma_tr, idx2, use_hybrid_method, action_num)
             original_total = w1 + w2
 
             loss = original_total - merged_node_value

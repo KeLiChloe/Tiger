@@ -38,7 +38,7 @@ class DASTNode:
 class DASTree:
     """DAST decision tree for customer segmentation."""
     
-    def __init__(self, x, y, D, gamma, candidate_thresholds, min_leaf_size, max_depth, algo, use_hybrid_method):
+    def __init__(self, x, y, D, gamma, candidate_thresholds, min_leaf_size, max_depth, algo, use_hybrid_method, action_num=None):
         self.x = x
         self.y = y
         self.D = D
@@ -47,6 +47,7 @@ class DASTree:
         self.min_leaf_size = min_leaf_size
         self.max_depth = max_depth
         self.algo = algo
+        self.action_num = action_num
 
         self.root = None
         self.leaf_nodes = []
@@ -149,7 +150,7 @@ class DASTree:
     def _grow_node(self, indices, depth):
         """Recursively grow tree by finding best split at each node."""
         node = DASTNode(indices, depth)
-        node.value = compute_node_DR_value(self.y, self.D, self.gamma, indices, use_hybrid_method=self.use_hybrid_method)
+        node.value = compute_node_DR_value(self.y, self.D, self.gamma, indices, use_hybrid_method=self.use_hybrid_method, action_num=self.action_num)
 
         if self.debug:
             self._debug_print_node_info(node, indices)
@@ -201,8 +202,8 @@ class DASTree:
                     continue
                 
                 # Criterion 1: Gain (profit improvement)
-                left_val = compute_node_DR_value(self.y, self.D, self.gamma, left_idx, use_hybrid_method=self.use_hybrid_method)
-                right_val = compute_node_DR_value(self.y, self.D, self.gamma, right_idx, use_hybrid_method=self.use_hybrid_method)
+                left_val = compute_node_DR_value(self.y, self.D, self.gamma, left_idx, use_hybrid_method=self.use_hybrid_method, action_num=self.action_num)
+                right_val = compute_node_DR_value(self.y, self.D, self.gamma, right_idx, use_hybrid_method=self.use_hybrid_method, action_num=self.action_num)
                 gain = left_val + right_val - node.value
                 
                 # DEBUG: Print splits around x=11
@@ -333,11 +334,15 @@ class DASTree:
         return np.var(self.x[indices], axis=0, ddof=1).sum()
     
     def _check_leaf_constraints(self, indices):
-        """Check if leaf has minimum required samples for each treatment."""
+        """Check if leaf has minimum required samples for ALL possible actions."""
         D_sub = self.D[indices]
-        n_treated = np.sum(D_sub == 1)
-        n_control = np.sum(D_sub == 0)
-        return n_treated >= self.min_leaf_size and n_control >= self.min_leaf_size
+        
+        # STRICT: All actions 0..action_num-1 must each have at least min_leaf_size samples
+        for a in range(self.action_num):
+            if np.sum(D_sub == a) < self.min_leaf_size:
+                return False
+        
+        return True
 
     # ============================================================
     # Pruning: Select M most valuable splits
@@ -396,12 +401,8 @@ class DASTree:
         D_seg = data['D'][indices]
         Y_seg = data['Y'][indices]
         
-        if include_interactions:
-            est_alpha, est_beta, est_tau, est_action, est_delta = estimate_segment_parameters(X_seg, D_seg, Y_seg, include_interactions)
-            segment = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id, est_delta=est_delta)
-        else:
-            est_alpha, est_beta, est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg, include_interactions)
-            segment = SegmentEstimate(est_alpha, est_beta, est_tau, est_action, segment_id)
+        est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg, include_interactions, self.action_num)
+        segment = SegmentEstimate(est_tau, est_action, segment_id)
         
         for i in indices:
             customers[i].est_segment[self.algo] = segment
@@ -443,25 +444,49 @@ class DASTree:
             return None
         D_sub = self.D[indices]
         Y_sub = self.y[indices]
-        n_treated = np.sum(D_sub == 1)
-        n_control = np.sum(D_sub == 0)
-        if n_treated > 0 and n_control > 0:
-            return np.mean(Y_sub[D_sub == 1]) - np.mean(Y_sub[D_sub == 0])
-        return None
+        unique_actions = np.unique(D_sub)
+        
+        if len(unique_actions) < 2:
+            return None
+        
+        # Compute mean outcome for each action
+        action_means = {}
+        for action in unique_actions:
+            Y_a = Y_sub[D_sub == action]
+            if len(Y_a) > 0:
+                action_means[int(action)] = np.mean(Y_a)
+        
+        if len(action_means) < 2:
+            return None
+        
+        best_action = max(action_means, key=action_means.get)
+        baseline_action = 0 if 0 in action_means else min(action_means.keys())
+        return action_means[best_action] - action_means[baseline_action]
     
     def _debug_print_node_info(self, node, indices):
         """Print node information for debugging."""
         depth = node.depth
         D_node = self.D[indices]
         Y_node = self.y[indices]
-        n_treated = np.sum(D_node == 1)
-        n_control = np.sum(D_node == 0)
+        unique_actions = np.unique(D_node)
         
-        if n_treated > 0 and n_control > 0:
-            tau_hat = np.mean(Y_node[D_node == 1]) - np.mean(Y_node[D_node == 0])
-            est_action = int(tau_hat >= 0)
-            print(f"\n{'  '*depth}📍 Depth {depth}: N={len(indices)}, Value={node.value:.4f}, "
-                  f"tau_hat={tau_hat:.4f}, est_action={est_action}")
+        if len(unique_actions) >= 2:
+            # Compute mean outcome for each action
+            action_means = {}
+            for action in unique_actions:
+                Y_a = Y_node[D_node == action]
+                if len(Y_a) > 0:
+                    action_means[int(action)] = np.mean(Y_a)
+            
+            if len(action_means) >= 2:
+                best_action = max(action_means, key=action_means.get)
+                baseline_action = 0 if 0 in action_means else min(action_means.keys())
+                tau_hat = action_means[best_action] - action_means[baseline_action]
+                print(f"\n{'  '*depth}📍 Depth {depth}: N={len(indices)}, Value={node.value:.4f}, "
+                      f"tau_hat={tau_hat:.4f}, best_action={best_action}")
+            else:
+                print(f"\n{'  '*depth}📍 Depth {depth}: N={len(indices)}, Value={node.value:.4f}, "
+                      f"[insufficient data for multiple actions]")
         else:
             print(f"\n{'  '*depth}📍 Depth {depth}: N={len(indices)}, Value={node.value:.4f}, "
                   f"[insufficient data]")
@@ -495,8 +520,8 @@ class DASTree:
             right_tau_str = f"{right_tau:.4f}" if right_tau is not None else "N/A"
             
             # Calculate actual DR values (the components of gain)
-            left_val = compute_node_DR_value(self.y, self.D, self.gamma, left_idx, use_hybrid_method=self.use_hybrid_method)
-            right_val = compute_node_DR_value(self.y, self.D, self.gamma, right_idx, use_hybrid_method=self.use_hybrid_method)
+            left_val = compute_node_DR_value(self.y, self.D, self.gamma, left_idx, use_hybrid_method=self.use_hybrid_method, action_num=self.action_num)
+            right_val = compute_node_DR_value(self.y, self.D, self.gamma, right_idx, use_hybrid_method=self.use_hybrid_method, action_num=self.action_num)
             recalc_gain = left_val + right_val - parent_value
             
             print(f"{indent}     #{rank}: gain_stored={g:.4f}, gain_recalc={recalc_gain:.4f}, feature={j}, threshold={t:.4f}")
@@ -582,6 +607,7 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth,
         max_depth=max_depth,
         algo=algo,
         use_hybrid_method=use_hybrid_method,
+        action_num=pop.action_num
     )
     tree.build(debug=debug)
     

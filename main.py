@@ -44,6 +44,7 @@ def main(args, param_range):
     exp_result_dict = {
     "exp_params": {
         "sequence_seed": args.sequence_seed,
+        "action_num": getattr(args, 'action_num', 2),
         "K": args.K,
         "d": args.d,
         "partial_x": args.partial_x,
@@ -89,7 +90,8 @@ def main(args, param_range):
                                   args.disturb_covariate_noise, 
                                   param_range, 
                                   args.DR_generation_method, 
-                                  args.partial_x, 
+                                  args.partial_x,
+                                  action_num=getattr(args, 'action_num', 2),
                                   X_noise_std_scale=args.X_noise_std_scale,
                                   Y_noise_std_scale=args.Y_noise_std_scale,
                                   disallowed_ball_radius=getattr(args, 'disallowed_ball_radius', None))
@@ -199,7 +201,7 @@ def main(args, param_range):
                     est_segment_ids_train = df[f'{algo}_est_segment_id'].values[pop.train_indices]
                     S_metrics = structure_oracle(true_segment_ids_train, est_segment_ids_train)
                     E_metrics = estimation_oracle(pop.pilot_customers, algo=algo)
-                    P_metrics = policy_oracle(pop.pilot_customers, algo=algo) #TODO: apply to implement customers
+                    P_metrics = policy_oracle(pop.pilot_customers, algo=algo, signal_d=pop.signal_d)
                     
                     # Record all
                     results_M.append({
@@ -216,8 +218,7 @@ def main(args, param_range):
                         
                         "ARI": S_metrics["ARI"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "NMI": S_metrics["NMI"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                        "MSE_param": E_metrics["MSE_param"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                        "MSE_outcome": E_metrics["MSE_outcome"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
+                        "MSE_tau": E_metrics["MSE_tau"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "regret": P_metrics["regret"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "mistreatment_rate": P_metrics["mistreatment_rate"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "manager_profit": P_metrics["manager_profit"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
@@ -232,8 +233,7 @@ def main(args, param_range):
                 oracle_picked_M = {
                     'Oracle_ARI': df_results_M.at[df_results_M['ARI'].idxmax(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                     'Oracle_NMI': df_results_M.at[df_results_M['NMI'].idxmax(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
-                    'Oracle_MSE_param': df_results_M.at[df_results_M['MSE_param'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
-                    'Oracle_MSE_outcome': df_results_M.at[df_results_M['MSE_outcome'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
+                    'Oracle_MSE_tau': df_results_M.at[df_results_M['MSE_tau'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                     'Oracle_Regret': df_results_M.at[df_results_M['regret'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                     'Oracle_Mistreat': df_results_M.at[df_results_M['mistreatment_rate'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                 }
@@ -247,15 +247,21 @@ def main(args, param_range):
                 #     print(f"  {metric}: \tM = {picked_m_val}, manager profit = {df_results_M.loc[idx, 'manager_profit']:.2f}")
 
 
+                is_meta_learner = algo in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"]
+                if is_meta_learner:
+                    row_at_picked_M = None
+                else:
+                    picked_m_val = picked_M[f'{algo}_picked_M']
+                    row_at_picked_M = df_results_M.loc[df_results_M['M'] == picked_m_val].iloc[0]
+
                 algo_result_dict[algo] = {
-                    "picked_M": picked_M if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else "Not applicable",
-                    "profit_at_manager_picked_M": df_results_M.loc[df_results_M['M'] == picked_M[f'{algo}_picked_M'], 'manager_profit'].values[0] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                    "ARI": S_metrics["ARI"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                    "NMI": S_metrics["NMI"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                    "MSE_param": E_metrics["MSE_param"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                    "MSE_outcome": E_metrics["MSE_outcome"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                    "regret": P_metrics["regret"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                    "mistreatment_rate": P_metrics["mistreatment_rate"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
+                    "picked_M": picked_M if not is_meta_learner else "Not applicable",
+                    "profit_at_manager_picked_M": row_at_picked_M['manager_profit'] if not is_meta_learner else None,
+                    "ARI": row_at_picked_M['ARI'] if not is_meta_learner else None,
+                    "NMI": row_at_picked_M['NMI'] if not is_meta_learner else None,
+                    "MSE_tau": row_at_picked_M['MSE_tau'] if not is_meta_learner else None,
+                    "regret": row_at_picked_M['regret'] if not is_meta_learner else None,
+                    "mistreatment_rate": row_at_picked_M['mistreatment_rate'] if not is_meta_learner else None,
                 }
                 
                 # Retrain and assign implementation customers to segments  

@@ -29,32 +29,28 @@ ro.r('library(policytree)')
 class SegmentTrue:
     def __init__(self, alpha, beta, tau, segment_id, x_mean=None, delta=None):
         self.alpha = alpha
-        self.beta = beta  # np.array of shape (d,)
-        self.tau = tau
-        self.delta = delta  # np.array of shape (d,) for interaction terms
+        self.beta = beta      # shape (d,)
+        self.tau = tau        # shape (action_num,): tau[0]=0 (baseline), tau[a] = effect of action a vs baseline
+        self.delta = delta    # shape (action_num, d) or None: delta[0]=zeros, delta[a] = interaction for action a
         self.x_mean = x_mean
         self.segment_id = segment_id
-        self.action = int(tau>=0)
+        # Best action = argmax over all tau values
+        self.action = int(np.argmax(self.tau))
 
     def generate_outcome(self, x, D_i, noise_std, signal_d):
         noise = np.random.normal(0, noise_std)
-        # Base outcome: y = alpha + beta @ x + tau * D + delta @ x * D + noise
-        base = self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau * D_i
-        
-        # Add interaction terms if delta is provided
+        # y = alpha + beta @ x + tau[D_i] + delta[D_i] @ x + noise
+        base = self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau[int(D_i)]
         if self.delta is not None:
-            interaction = (self.delta[:signal_d] * x[:signal_d]).sum() * D_i
+            interaction = self.delta[int(D_i), :signal_d] @ x[:signal_d]
             return base + interaction + noise
         return base + noise
         
 
         
 class SegmentEstimate:
-    def __init__(self, est_alpha, est_beta, est_tau, est_action, segment_id=None, est_delta=None):
-        self.est_alpha = est_alpha
-        self.est_beta = est_beta  # np.array of shape (d,)
+    def __init__(self, est_tau, est_action, segment_id=None):
         self.est_tau = est_tau
-        self.est_delta = est_delta  # np.array of shape (d,) for interaction terms
         self.est_action = est_action  # 0 or 1
         self.segment_id = segment_id
 
@@ -103,11 +99,12 @@ class Customer_implement:
 # ----------------------------------------
 
 class PopulationSimulator:
-    def __init__(self, N_total_pilot_customers, N_total_implement_customers, d, K, disturb_covariate_noise, param_range, DR_generation_method, partial_x, X_mean_vectors=None, X_noise_std_scale=None, Y_noise_std_scale=None, disallowed_ball_radius=None):
+    def __init__(self, N_total_pilot_customers, N_total_implement_customers, d, K, disturb_covariate_noise, param_range, DR_generation_method, partial_x, action_num, X_mean_vectors=None, X_noise_std_scale=None, Y_noise_std_scale=None, disallowed_ball_radius=None):
         self.N_total_pilot_customers = N_total_pilot_customers
         self.N_total_implement_customers = N_total_implement_customers
         self.d = d
         self.K = K
+        self.action_num = action_num  # Number of actions (default 2 for binary treatment)
         
         self.param_range = param_range
         self.disturb_covariate_noise = disturb_covariate_noise
@@ -145,9 +142,9 @@ class PopulationSimulator:
         if Y_noise_std_scale is None:
             raise ValueError("Y_noise_std_scale is required. Please provide a scale factor for outcome noise.")
         
-        # Compute average treatment effect magnitude across segments
-        tau_values = np.array([seg.tau for seg in self.true_segments])
-        avg_tau_magnitude = np.mean(np.abs(tau_values))
+        # Compute average treatment effect magnitude across segments (only non-baseline actions)
+        tau_values = np.array([seg.tau[1:] for seg in self.true_segments]).flatten()
+        avg_tau_magnitude = np.mean(np.abs(tau_values)) if len(tau_values) > 0 else 1.0
         # Set noise_std as scale times average |tau|
         self.noise_std = Y_noise_std_scale * avg_tau_magnitude
         print(f"Computed Ynoise_std: {self.noise_std:.4f} (scale={Y_noise_std_scale}, avg_|tau|={avg_tau_magnitude:.4f})")
@@ -182,9 +179,17 @@ class PopulationSimulator:
             for k in range(self.K):
                 alpha = np.random.uniform(*pr["alpha"])
                 beta = np.random.uniform(*pr["beta"], size=self.d)
-                tau = np.random.uniform(*pr["tau"])
-                # Generate delta (interaction coefficients) if specified in param_range
-                delta = np.random.uniform(*pr["delta"], size=self.d) if pr["delta"] is not None else None
+                # tau[0]=0 (baseline), tau[a]~Uniform for a>0
+                tau_vec = np.zeros(self.action_num)
+                for a in range(1, self.action_num):
+                    tau_vec[a] = np.random.uniform(*pr["tau"])
+                # delta[0]=zeros, delta[a]~Uniform for a>0
+                if pr["delta"] is not None:
+                    delta_mat = np.zeros((self.action_num, self.d))
+                    for a in range(1, self.action_num):
+                        delta_mat[a] = np.random.uniform(*pr["delta"], size=self.d)
+                else:
+                    delta_mat = None
                 
                 # Generate x_mean with minimum distance constraint
                 max_attempts = 100
@@ -210,17 +215,25 @@ class PopulationSimulator:
                         x_mean = x_mean_candidate
                 
                 generated_means.append(x_mean)
-                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean, delta=delta))
+                true_segments.append(SegmentTrue(alpha, beta, tau_vec, segment_id=k, x_mean=x_mean, delta=delta_mat))
         else:
             # Use provided mean vectors
             for k in range(self.K):
                 alpha = np.random.uniform(*pr["alpha"])
                 beta = np.random.uniform(*pr["beta"], size=self.d)
-                tau = np.random.uniform(*pr["tau"])
-                # Generate delta (interaction coefficients) if specified in param_range
-                delta = np.random.uniform(*pr["delta"], size=self.d) if pr["delta"] is not None else None
+                # tau[0]=0 (baseline), tau[a]~Uniform for a>0
+                tau_vec = np.zeros(self.action_num)
+                for a in range(1, self.action_num):
+                    tau_vec[a] = np.random.uniform(*pr["tau"])
+                # delta[0]=zeros, delta[a]~Uniform for a>0
+                if pr["delta"] is not None:
+                    delta_mat = np.zeros((self.action_num, self.d))
+                    for a in range(1, self.action_num):
+                        delta_mat[a] = np.random.uniform(*pr["delta"], size=self.d)
+                else:
+                    delta_mat = None
                 x_mean = X_mean_vectors[k]
-                true_segments.append(SegmentTrue(alpha, beta, tau, segment_id=k, x_mean=x_mean, delta=delta))
+                true_segments.append(SegmentTrue(alpha, beta, tau_vec, segment_id=k, x_mean=x_mean, delta=delta_mat))
         
         return true_segments
     
@@ -262,27 +275,22 @@ class PopulationSimulator:
             best_pair = min(adjacent_pairs, key=lambda x: abs(x[2] - target_dist))
             idx1, idx2, dist = best_pair
             
-            tau1 = self.true_segments[idx1].tau
-            tau2 = self.true_segments[idx2].tau
             action1_before = self.true_segments[idx1].action
             action2_before = self.true_segments[idx2].action
             
-            # If they have the same sign, flip one of them
-            if tau1 * tau2 > 0:  # Same sign (both positive or both negative)
-                # Flip the sign of tau2
-                self.true_segments[idx2].tau = -tau2
-                self.true_segments[idx2].action = int(self.true_segments[idx2].tau >= 0)
+            # If same best action, flip the non-baseline tau entries for seg2
+            if action1_before == action2_before:
+                self.true_segments[idx2].tau[1:] = -self.true_segments[idx2].tau[1:]
+                self.true_segments[idx2].action = int(np.argmax(self.true_segments[idx2].tau))
                 
                 action2_after = self.true_segments[idx2].action
-                
-                print(f"⚠️  Adjacent clusters (segments {idx1} and {idx2}) had same tau sign.")
+                print(f"⚠️  Adjacent clusters (segments {idx1} and {idx2}) had same best action ({action1_before}).")
                 print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
-                print(f"   BEFORE flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={tau2:+7.2f} action={action2_before}")
-                print(f"   AFTER  flip: Seg{idx1} tau={tau1:+7.2f} action={action1_before}, Seg{idx2} tau={-tau2:+7.2f} action={action2_after}")
+                print(f"   Flipped tau[1:] for seg {idx2}. New best action: {action2_after}")
             else:
-                print(f"✓ Adjacent clusters (segments {idx1} and {idx2}) already have opposite tau signs.")
+                print(f"✓ Adjacent clusters (segments {idx1} and {idx2}) already have different best actions.")
                 print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
-                print(f"   Seg{idx1}: tau={tau1:+7.2f}, Seg{idx2}: tau={tau2:+7.2f}")
+                print(f"   Seg{idx1}: action={action1_before}, Seg{idx2}: action={action2_before}")
 
     def _generate_pilot_customers(self):
         pilot_customers = []
@@ -317,7 +325,7 @@ class PopulationSimulator:
                 x_full = x_signal
 
             # 6️⃣ Outcome
-            D_i = np.random.binomial(1, 0.5)
+            D_i = np.random.choice(self.action_num)  # Randomly assign action from 0 to action_num-1
             y = segment.generate_outcome(x_full, D_i, self.noise_std, self.signal_d)
 
             # 7️⃣ Save
@@ -414,12 +422,12 @@ class PopulationSimulator:
             mu = seg.x_mean[:self.signal_d]
             beta = seg.beta[:self.signal_d]
             alpha = seg.alpha
-            tau = seg.tau
-            delta = seg.delta[:self.signal_d] if seg.delta is not None else np.zeros(self.signal_d)
-            # Mean includes interaction term: alpha + beta @ mu + tau * D + delta @ mu * D
-            m_y = alpha + beta @ mu + tau * D + (delta @ mu) * D
-            # Variance includes interaction term contributions
-            v_y = beta @ Sigma @ beta + (delta @ Sigma @ delta) * (D**2) + 2 * D * (beta @ Sigma @ delta) + sigma**2
+            tau_D = seg.tau[int(D)]
+            delta_D = seg.delta[int(D), :self.signal_d] if seg.delta is not None else np.zeros(self.signal_d)
+            # y = alpha + beta @ mu + tau[D] + delta[D] @ mu
+            m_y = alpha + beta @ mu + tau_D + delta_D @ mu
+            # var(Y) = (beta + delta_D)^T Sigma (beta + delta_D) + sigma^2
+            v_y = (beta + delta_D) @ Sigma @ (beta + delta_D) + sigma**2
             return m_y, v_y
 
         def bc_univariate(m1, v1, m2, v2):
@@ -433,11 +441,11 @@ class PopulationSimulator:
         for k in range(K):
             for l in range(k+1, K):
                 bc_Ds = []
-                for D in (0, 1):
+                for D in range(self.action_num):
                     m1, v1 = y_params(self.true_segments[k], D)
                     m2, v2 = y_params(self.true_segments[l], D)
                     bc_Ds.append(bc_univariate(m1, v1, m2, v2))
-                bcs.append(0.5 * sum(bc_Ds))  # average over D
+                bcs.append(np.mean(bc_Ds))  # average over all actions
         return np.mean(bcs) if bcs else 1.0
 
 
@@ -466,18 +474,18 @@ class PopulationSimulator:
             mu = seg.x_mean[:self.signal_d]
             beta = seg.beta[:self.signal_d]
             alpha = seg.alpha
-            tau = seg.tau
-            delta = seg.delta[:self.signal_d] if seg.delta is not None else np.zeros(self.signal_d)
-            # Mean of Y includes interaction: alpha + beta @ mu + tau * D + delta @ mu * D
-            m_y = alpha + beta @ mu + tau * D + (delta @ mu) * D
+            tau_D = seg.tau[int(D)]
+            delta_D = seg.delta[int(D), :self.signal_d] if seg.delta is not None else np.zeros(self.signal_d)
+            # y = alpha + beta @ mu + tau[D] + delta[D] @ mu
+            m_y = alpha + beta @ mu + tau_D + delta_D @ mu
             m = np.concatenate([mu, [m_y]])
-            # Covariance: cov(X, Y) = Sigma @ (beta + D * delta)
-            cov_xy = Sigma @ (beta + D * delta)
-            # Variance of Y: var(Y) = (beta + D*delta)^T @ Sigma @ (beta + D*delta) + sigma^2
-            var_y = (beta + D * delta) @ Sigma @ (beta + D * delta) + sigma**2
+            # cov(X, Y) = Sigma @ (beta + delta_D)
+            cov_xy = Sigma @ (beta + delta_D)
+            # var(Y) = (beta + delta_D)^T Sigma (beta + delta_D) + sigma^2
+            var_y = (beta + delta_D) @ Sigma @ (beta + delta_D) + sigma**2
             S = np.block([
-                [Sigma,                     cov_xy.reshape(-1,1)],
-                [cov_xy.reshape(1,-1),      var_y]
+                [Sigma,                cov_xy.reshape(-1, 1)],
+                [cov_xy.reshape(1, -1), var_y]
             ])
             return m, S
 
@@ -485,11 +493,11 @@ class PopulationSimulator:
         for k in range(K):
             for l in range(k+1, K):
                 bc_Ds = []
-                for D in (0, 1):
+                for D in range(self.action_num):
                     m1, S1 = mean_cov_for(self.true_segments[k], D)
                     m2, S2 = mean_cov_for(self.true_segments[l], D)
                     bc_Ds.append(bhattacharyya_gaussian(m1, S1, m2, S2))
-                bcs.append(0.5 * sum(bc_Ds))  # average over D
+                bcs.append(np.mean(bc_Ds))  # average over all actions
         return np.mean(bcs) if bcs else 1.0
     
 
@@ -519,15 +527,17 @@ class PopulationSimulator:
         mus = [seg.x_mean[:self.signal_d] for seg in self.true_segments]
         alphas = [seg.alpha for seg in self.true_segments]
         betas = [seg.beta[:self.signal_d] for seg in self.true_segments]
+        # tau is now a vector (action_num,); delta is now a matrix (action_num, d)
         taus = [seg.tau for seg in self.true_segments]
-        deltas = [seg.delta[:self.signal_d] if seg.delta is not None else np.zeros(self.signal_d) 
+        deltas = [seg.delta[:, :self.signal_d] if seg.delta is not None 
+                  else np.zeros((self.action_num, self.signal_d)) 
                   for seg in self.true_segments]
 
         total_entropy = 0.0
         for i in range(N):
             # Only use signal dimensions of x
             x = X[i, :self.signal_d]
-            d_i = D[i]
+            d_i = int(D[i])
             y = Y[i]
 
             logliks = []
@@ -535,15 +545,15 @@ class PopulationSimulator:
                 mu = mus[k]
                 alpha = alphas[k]
                 beta = betas[k]
-                tau = taus[k]
-                delta = deltas[k]
+                tau_di = taus[k][d_i]
+                delta_di = deltas[k][d_i]
 
                 # log p(x | Z=k) - only signal dimensions
                 dx = x - mu
                 llx = -0.5 * (self.signal_d * np.log(2*np.pi) + logdet_Sigma + dx @ Sigma_inv @ dx)
 
-                # log p(y | x, D, Z=k) - includes interaction term
-                mean_y = alpha + beta @ x + tau * d_i + (delta @ x) * d_i
+                # log p(y | x, D, Z=k): y = alpha + beta @ x + tau[D] + delta[D] @ x
+                mean_y = alpha + beta @ x + tau_di + delta_di @ x
                 lly = -0.5 * (np.log(2*np.pi*sigma2) + (y - mean_y)**2 / sigma2)
 
                 logliks.append(llx + lly)  # equal priors
@@ -589,9 +599,6 @@ class PopulationSimulator:
         D_train = np.array([cust.D_i for cust in train_customers])
         Y_train = np.array([cust.y for cust in train_customers])
         
-        X0_train, Y0_train = X_train[D_train == 0], Y_train[D_train == 0]
-        X1_train, Y1_train = X_train[D_train == 1], Y_train[D_train == 1]
-        
         # Extract validation data (handle empty case)
         if len(val_customers) > 0:
             X_val = np.array([cust.x for cust in val_customers])
@@ -602,43 +609,58 @@ class PopulationSimulator:
             D_val = None
             Y_val = None
         
-        # Compute propensity score from training data
-        e = np.mean(D_train)  # Empirical treatment probability
-        # print(f"  Propensity score e = {e:.3f} (from training data)")
+        # Empirical propensity scores: e[a] = P(D=a) for each action a
+        n_actions = self.action_num
+        e = np.array([np.mean(D_train == a) for a in range(n_actions)])
+        e = np.clip(e, 1e-6, 1.0)  # avoid division by zero
+
+        def _compute_gamma(X, D, Y, models):
+            """
+            DR score for each action a:
+            Gamma[i, a] = mu_a(X_i) + (1/e[a]) * 1[D_i == a] * (Y_i - mu_a(X_i))
+            """
+            N = X.shape[0]
+            Gamma = np.zeros((N, n_actions))
+            for a in range(n_actions):
+                mu_a = models[a].predict(X)
+                indicator = (D == a).astype(float)
+                Gamma[:, a] = mu_a + (indicator / e[a]) * (Y - mu_a)
+            return Gamma
 
         if method == "reg":
-            model_0 = LinearRegression()
-            model_1 = LinearRegression()
-            
-            # Fit on TRAIN data
-            model_0.fit(X0_train, Y0_train)
-            model_1.fit(X1_train, Y1_train)
+            models = {}
+            for a in range(n_actions):
+                X_a = X_train[D_train == a]
+                Y_a = Y_train[D_train == a]
+                if len(X_a) == 0:
+                    raise ValueError(f"No training samples for action {a}. Cannot fit outcome model.")
+                m = LinearRegression()
+                m.fit(X_a, Y_a)
+                models[a] = m
 
-            # Predict on TRAIN data
-            mu_0_hat_train = model_0.predict(X_train)
-            mu_1_hat_train = model_1.predict(X_train)
-            
-            gamma_1_train = mu_1_hat_train + (D_train / e) * (Y_train - mu_1_hat_train)
-            gamma_0_train = mu_0_hat_train + ((1 - D_train) / (1 - e)) * (Y_train - mu_0_hat_train)
-            Gamma_train = np.stack([gamma_0_train, gamma_1_train], axis=1)
+            Gamma_train = _compute_gamma(X_train, D_train, Y_train, models)
+            Gamma_val = _compute_gamma(X_val, D_val, Y_val, models) if X_val is not None and len(X_val) > 0 else None
 
-            # Predict on VALIDATION data (if validation set exists)
-            if X_val is not None and len(X_val) > 0:
-                mu_0_hat_val = model_0.predict(X_val)
-                mu_1_hat_val = model_1.predict(X_val)
+        elif method == "mlp":
+            models = {}
+            for a in range(n_actions):
+                X_a = X_train[D_train == a]
+                Y_a = Y_train[D_train == a]
+                if len(X_a) == 0:
+                    raise ValueError(f"No training samples for action {a}. Cannot fit outcome model.")
+                m = MLPRegressor(hidden_layer_sizes=(64, 32), activation='relu', max_iter=10000)
+                m.fit(X_a, Y_a)
+                models[a] = m
 
-                gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
-                gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
-                Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
-            else:
-                Gamma_val = None
-        
+            Gamma_train = _compute_gamma(X_train, D_train, Y_train, models)
+            Gamma_val = _compute_gamma(X_val, D_val, Y_val, models) if X_val is not None and len(X_val) > 0 else None
+
         elif method == "forest":
             with localconverter(default_converter + numpy2ri.converter):
                 X_train_r = ro.conversion.py2rpy(X_train)
                 Y_train_r = ro.conversion.py2rpy(Y_train)
                 D_train_r = ro.conversion.py2rpy(D_train)
-                
+
             ro.globalenv['Y_train'] = Y_train_r
             ro.globalenv['D_train'] = D_train_r
             Y_train_r = ro.r('as.numeric(Y_train)')
@@ -646,61 +668,25 @@ class PopulationSimulator:
 
             # Fit causal forest on TRAIN data
             cforest = grf.causal_forest(X_train_r, Y_train_r, D_train_r)
-            
-            # Predict on TRAIN data
+
+            # Compute DR scores on TRAIN data
             Gamma_train_r = policytree.double_robust_scores(cforest)
             with localconverter(default_converter + numpy2ri.converter):
                 Gamma_train = ro.conversion.rpy2py(Gamma_train_r)
-            
-            # Predict on VALIDATION data (if validation set exists)
+
+            # Compute DR scores on VALIDATION data
             if X_val is not None and len(X_val) > 0:
                 with localconverter(default_converter + numpy2ri.converter):
                     X_val_r = ro.conversion.py2rpy(X_val)
-                    
                 Gamma_val_r = policytree.double_robust_scores(cforest, newdata=X_val_r)
                 with localconverter(default_converter + numpy2ri.converter):
                     Gamma_val = ro.conversion.rpy2py(Gamma_val_r)
             else:
                 Gamma_val = None
 
-        elif method == "mlp":
-            model_0 = MLPRegressor(
-                hidden_layer_sizes=(64, 32),
-                activation='relu',
-                max_iter=10000,
-            )
-            model_1 = MLPRegressor(
-                hidden_layer_sizes=(64, 32),
-                activation='relu',
-                max_iter=10000,
-            )
-            
-            # Fit on TRAIN data
-            model_0.fit(X0_train, Y0_train)
-            model_1.fit(X1_train, Y1_train)
-
-            # Predict on TRAIN data
-            mu_0_hat_train = model_0.predict(X_train)
-            mu_1_hat_train = model_1.predict(X_train)
-            
-            gamma_1_train = mu_1_hat_train + (D_train / e) * (Y_train - mu_1_hat_train)
-            gamma_0_train = mu_0_hat_train + ((1 - D_train) / (1 - e)) * (Y_train - mu_0_hat_train)
-            Gamma_train = np.stack([gamma_0_train, gamma_1_train], axis=1)
-            
-            # Predict on VALIDATION data (if validation set exists)
-            if X_val is not None and len(X_val) > 0:
-                mu_0_hat_val = model_0.predict(X_val)
-                mu_1_hat_val = model_1.predict(X_val)
-                
-                gamma_1_val = mu_1_hat_val + (D_val / e) * (Y_val - mu_1_hat_val)
-                gamma_0_val = mu_0_hat_val + ((1 - D_val) / (1 - e)) * (Y_val - mu_0_hat_val)
-                Gamma_val = np.stack([gamma_0_val, gamma_1_val], axis=1)
-            else:
-                Gamma_val = None
-        
         else:
             raise ValueError(f"Unknown DR generation method: {method}")
-            
+
         return Gamma_train, Gamma_val
 
 
@@ -708,10 +694,10 @@ class PopulationSimulator:
         indices = np.arange(self.N_total_pilot_customers)
 
         split = int(self.N_total_pilot_customers * train_frac)
-        self.train_idx, self.val_idx = indices[:split], indices[split:]
+        self.train_indices, self.val_indices = indices[:split], indices[split:]
 
-        self.train_customers = [self.pilot_customers[i] for i in self.train_idx]
-        self.val_customers = [self.pilot_customers[i] for i in self.val_idx]
+        self.train_customers = [self.pilot_customers[i] for i in self.train_indices]
+        self.val_customers = [self.pilot_customers[i] for i in self.val_indices]
         
         # Compute gamma scores
         if train_frac < 1.0:
@@ -755,8 +741,8 @@ class PopulationSimulator:
             seg.segment_id: {
                 'alpha': seg.alpha,
                 'beta': seg.beta,
-                'tau': seg.tau,
-                'delta': seg.delta if seg.delta is not None else np.zeros(self.d),
+                'tau': seg.tau,                   # shape (action_num,)
+                'delta': seg.delta if seg.delta is not None else np.zeros((self.action_num, self.d)),
             }
             for seg in self.true_segments
         }

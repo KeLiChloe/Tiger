@@ -53,59 +53,58 @@ def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_label
         assert cust.est_segment[algo].segment_id == m, f"Segment ID mismatch for customer {cust.customer_id}: expected {m}, got {cust.est_segment[algo].segment_id}"
         
 
-def estimate_segment_parameters(X, D, Y, include_interactions):
+def estimate_segment_parameters(X, D, Y, include_interactions, action_num=None):
     """
-    Estimate segment parameters using linear regression.
+    Estimate treatment effect and recommend action.
+    
+    STRICT REQUIREMENT: All actions in 0..action_num-1 must have samples in the data.
+    
+    For binary treatment (2 actions):
+        - est_tau = mean(Y|D=1) - mean(Y|D=0)
+        - est_action = 1 if est_tau >= 0 else 0
+    
+    For multi-arm treatment (>2 actions):
+        - For each action a, compute mean_a = mean(Y|D=a)
+        - est_action = argmax_a mean_a
+        - est_tau = mean_{est_action} - mean_0 (effect relative to action 0)
     
     Parameters:
-        X: (N, d) array of covariates
-        D: (N,) array of treatment indicators
+        X: (N, d) array of covariates (not used, kept for API compatibility)
+        D: (N,) array of action indicators
         Y: (N,) array of outcomes
-        include_interactions: If True, estimates interaction coefficients (delta)
+        include_interactions: not used, kept for API compatibility
+        action_num: int, total number of possible actions (strict check: all must be present)
     
     Returns:
-        If include_interactions=False: (est_alpha, est_beta, est_tau, est_action)
-        If include_interactions=True: (est_alpha, est_beta, est_tau, est_action, est_delta)
+        est_tau: float, estimated treatment effect
+        est_action: int, recommended action
     """
     Y = np.ravel(Y)
     D = np.ravel(D)
-    d = X.shape[1]
     
-    # use diffs-in-means to estimate action
-    Y1 = Y[D == 1]
-    Y0 = Y[D == 0]
-    est_action = int(np.mean(Y1) > np.mean(Y0))
+    unique_actions_in_data = np.unique(D)
     
-    # Adjust minimum data requirement based on whether interactions are included
-    # min_samples = d + 2 if not include_interactions else 2*d + 2
+    # Strict check: all actions 0..action_num-1 must be present
+    if action_num is not None:
+        for a in range(action_num):
+            if a not in unique_actions_in_data:
+                print(f"Warning: Action {a} missing in segment data.")
+                return 404, 404
     
-    # if len(X) < min_samples:
-    #     # print("Warning: Not enough data to fit model.")
-    #     error_val = (404, np.ones(d)*404, 404, 404, np.ones(d)*404) if include_interactions else (404, np.ones(d)*404, 404, 404)
-    #     return error_val
     
-    # check if D_vec contains only 0s or 1s
-    if np.all(D == 0) or np.all(D == 1):
-        print("Warning: D_i contains only one treatment assignment.")
-        error_val = (404, np.ones(d)*404, 404, 404, np.ones(d)*404) if include_interactions else (404, np.ones(d)*404, 404, 404)
-        return error_val
+    # Compute mean outcome for each action
+    action_means = {}
+    for action in unique_actions_in_data:
+        action_means[int(action)] = np.mean(Y[D == action])
     
-    X_design = build_design_matrix(X, D, include_interactions=include_interactions)
+    # Recommend action with highest mean outcome
+    est_action = max(action_means, key=action_means.get)
     
-    model = LinearRegression(fit_intercept=False).fit(X_design, Y)
-    theta = model.coef_.ravel()
+    # Treatment effect relative to action 0
+    baseline_action = 0 if 0 in action_means else min(action_means.keys())
+    est_tau = action_means[est_action] - action_means[baseline_action]
     
-    est_alpha = theta[0]
-    est_beta = theta[1:d+1]
-    est_tau = theta[d+1]
-    
-    if include_interactions:
-        est_delta = theta[d+2:]  # Interaction coefficients
-    
-    if include_interactions:
-        return est_alpha, est_beta, est_tau, est_action, est_delta
-    else:
-        return est_alpha, est_beta, est_tau, est_action
+    return est_tau, int(est_action)
 
 
 def plot_segment_sankey(original, pruned):
@@ -134,22 +133,32 @@ def plot_segment_sankey(original, pruned):
 
 
 # estimated total profits of a segment after applying the learnt policy to the customers in that segment
-def compute_node_DR_value(Y, D, gamma, indices, use_hybrid_method):
+def compute_node_DR_value(Y, D, gamma, indices, use_hybrid_method, action_num=None):
     D_m = D[indices]
     Y_m = Y[indices]
 
-    n1 = np.sum(D_m == 1)
-    n0 = np.sum(D_m == 0)
-
-    # TODO: what is a reasonable return value here?
-    if n1 == 0 or n0 == 0:
-        return 0 
-        # raise ValueError("The number of customers of an action is 0!")
-
-    y1 = np.mean(Y_m[D_m == 1])
-    y0 = np.mean(Y_m[D_m == 0])
-    tau_hat = y1 - y0
-    a_i = int(tau_hat >= 0)
+    unique_actions_in_data = np.unique(D_m)
+    
+    # Strict check: all actions 0..action_num-1 must be present
+    if action_num is not None:
+        for a in range(action_num):
+            if a not in unique_actions_in_data:
+                return 0
+    elif len(unique_actions_in_data) < 2:
+        return 0
+    
+    # Compute mean outcome for each action
+    action_means = {}
+    for action in unique_actions_in_data:
+        Y_a = Y_m[D_m == action]
+        action_means[int(action)] = np.mean(Y_a) if len(Y_a) > 0 else 0
+    
+    # Recommend action with highest mean outcome
+    a_i = max(action_means, key=action_means.get)
+    
+    # Compute treatment effect relative to action 0 (or minimum action)
+    baseline_action = 0 if 0 in action_means else min(action_means.keys())
+    tau_hat = action_means[a_i] - action_means[baseline_action]
     
     
     if use_hybrid_method is True:
@@ -160,10 +169,9 @@ def compute_node_DR_value(Y, D, gamma, indices, use_hybrid_method):
         value = np.sum(Y_m[D_m == a_i]) + np.sum(gamma_a_i_m[D_m != a_i])
     else:
         # Method 2: Gamma only
-        gamma_0_m = gamma[indices, 0]
-        gamma_1_m = gamma[indices, 1]
-        V_i = (1 - a_i) * gamma_0_m + a_i * gamma_1_m
-        value = np.sum(V_i)
+        # Sum of gamma values for the recommended action
+        gamma_a_i_m = gamma[indices, a_i]
+        value = np.sum(gamma_a_i_m)
     
     return value
 
@@ -192,9 +200,12 @@ def evaluate_on_validation(pop: PopulationSimulator, algo, Gamma_val, customers=
         # BUG FIX: Only handle the case when action is undecided (404)
         if assigned_action == 404:
             # For algorithms that can't decide (action=404), need a fallback
+            # Get action_num from true segment's action range (assuming actions are 0 to action_num-1)
+            # For simplicity, use action 0 or 1 as fallback
             if algo in ["mst", "policy_tree", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
                 # These algorithms randomly assign when undecided
-                assigned_action = np.random.choice([0, 1])
+                # Use action 0 as safe fallback (or could randomize among available actions)
+                assigned_action = 0
                 cust.est_segment[algo].est_action = assigned_action
             else:
                 # For other algorithms, use true action as fallback
@@ -303,6 +314,7 @@ def parse_args():
     parser.add_argument("--d", type=int, help="Dimensionality of covariates")
     parser.add_argument("--partial_x", type=float, help="Fraction of x used in outcome generation")
     parser.add_argument("--K", type=int, help="Number of segments")
+    parser.add_argument("--action_num", type=int, default=2, help="Number of actions (default: 2 for binary treatment)")
     parser.add_argument("--disallowed_ball_radius", type=float, help="Minimum distance between mean vectors as scale factor (e.g., 0.8 means min_dist = 0.8 * space_range/K^(1/d)). Default: 0.5")
     parser.add_argument("--X_noise_std_scale", type=float, required=True, help="Scale factor for within-cluster covariate noise as a multiple of average distance between mean vectors")
     parser.add_argument("--disturb_covariate_noise", type=float, help="Covariate noise across segments")
