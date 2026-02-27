@@ -208,7 +208,6 @@ def main(args, param_range):
                         
                         "ARI": S_metrics["ARI"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "NMI": S_metrics["NMI"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
-                        "MSE_tau": E_metrics["MSE_tau"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "regret": P_metrics["regret"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "mistreatment_rate": P_metrics["mistreatment_rate"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
                         "manager_profit": P_metrics["manager_profit"] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else None,
@@ -223,7 +222,6 @@ def main(args, param_range):
                 oracle_picked_M = {
                     'Oracle_ARI': df_results_M.at[df_results_M['ARI'].idxmax(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                     'Oracle_NMI': df_results_M.at[df_results_M['NMI'].idxmax(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
-                    'Oracle_MSE_tau': df_results_M.at[df_results_M['MSE_tau'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                     'Oracle_Regret': df_results_M.at[df_results_M['regret'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                     'Oracle_Mistreat': df_results_M.at[df_results_M['mistreatment_rate'].idxmin(), 'M'] if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                 }
@@ -249,7 +247,6 @@ def main(args, param_range):
                     "profit_at_manager_picked_M": row_at_picked_M['manager_profit'] if not is_meta_learner else None,
                     "ARI": row_at_picked_M['ARI'] if not is_meta_learner else None,
                     "NMI": row_at_picked_M['NMI'] if not is_meta_learner else None,
-                    "MSE_tau": row_at_picked_M['MSE_tau'] if not is_meta_learner else None,
                     "regret": row_at_picked_M['regret'] if not is_meta_learner else None,
                     "mistreatment_rate": row_at_picked_M['mistreatment_rate'] if not is_meta_learner else None,
                 }
