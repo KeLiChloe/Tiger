@@ -280,10 +280,6 @@ with open(file_path, "rb") as f:
 comparators = list(data.keys())
 comparators.remove('dast')
 comparators.remove('exp_params')
-comparators.remove('X_overlap_score')
-comparators.remove('y_overlap_score')
-comparators.remove('X_y_overlap_score')
-comparators.remove('ambiguity_score')
 try:
     comparators.remove('seed')
 except:

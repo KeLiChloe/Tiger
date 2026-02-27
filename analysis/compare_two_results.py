@@ -69,7 +69,7 @@ def get_experiment_stats(file_path):
         return {}
 
     # 1. 提取 Comparators
-    ignore_keys = {'dast', 'exp_params', 'seed', 'X_overlap_score', 'y_overlap_score', 'X_y_overlap_score', 'ambiguity_score'}
+    ignore_keys = {'dast', 'exp_params', 'seed'}
     comparators = list(set(data.keys()) - ignore_keys)
     
     # 2. 计算并清洗

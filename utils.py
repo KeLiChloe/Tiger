@@ -199,19 +199,12 @@ def evaluate_on_validation(pop: PopulationSimulator, algo, Gamma_val, customers=
         
         # BUG FIX: Only handle the case when action is undecided (404)
         if assigned_action == 404:
-            # For algorithms that can't decide (action=404), need a fallback
-            # Get action_num from true segment's action range (assuming actions are 0 to action_num-1)
-            # For simplicity, use action 0 or 1 as fallback
             if algo in ["mst", "policy_tree", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
-                # These algorithms randomly assign when undecided
-                # Use action 0 as safe fallback (or could randomize among available actions)
                 assigned_action = 0
                 cust.est_segment[algo].est_action = assigned_action
             else:
-                # For other algorithms, use true action as fallback
                 assigned_action = cust.true_segment.action
                 cust.est_segment[algo].est_action = cust.true_segment.action
-        # Otherwise, use the estimated action (0 or 1) directly - no modification needed!
         
         if int(assigned_action) == int(cust.D_i):
             V += cust.y
@@ -299,14 +292,15 @@ def parse_args():
     parser.add_argument("--config", type=str, default="config.yml", help="Path to configuration file")
     
     parser.add_argument("--plot", action="store_true", help="Enable plotting")
-    parser.add_argument("--compute_overlap", action="store_true", help="Compute overlap between segments")
-    parser.add_argument("--debug_comparison", action="store_true", help="Enable detailed debug comparison of segment estimates")
 
 
-    parser.add_argument("--alpha_range", type=float, nargs=2, help="Range for alpha parameter")
-    parser.add_argument("--beta_range", type=float, nargs=2, help="Range for beta parameter")
-    parser.add_argument("--tau_range", type=float, nargs=2, help="Range for tau parameter")
-    parser.add_argument("--delta_range", type=float, nargs=2, help="Range for delta (interaction) parameter")
+    parser.add_argument("--outcome_type", type=str, choices=["continuous", "discrete"], required=True,
+                        help="Outcome type: 'continuous' (linear regression) or 'discrete' (Bernoulli)")
+    parser.add_argument("--alpha_range", type=float, nargs=2, help="Range for alpha parameter (continuous only)")
+    parser.add_argument("--beta_range", type=float, nargs=2, help="Range for beta parameter (continuous only)")
+    parser.add_argument("--tau_range", type=float, nargs=2, help="Range for tau parameter (continuous only)")
+    parser.add_argument("--delta_range", type=float, nargs=2, help="Range for delta (interaction) parameter (continuous only)")
+    parser.add_argument("--p_range", type=float, nargs=2, help="Range for Bernoulli probability p (discrete only)")
     parser.add_argument("--x_mean_range", type=float, nargs=2, help="Range for x_mean parameter")
 
     
@@ -318,13 +312,14 @@ def parse_args():
     parser.add_argument("--disallowed_ball_radius", type=float, help="Minimum distance between mean vectors as scale factor (e.g., 0.8 means min_dist = 0.8 * space_range/K^(1/d)). Default: 0.5")
     parser.add_argument("--X_noise_std_scale", type=float, required=True, help="Scale factor for within-cluster covariate noise as a multiple of average distance between mean vectors")
     parser.add_argument("--disturb_covariate_noise", type=float, help="Covariate noise across segments")
-    parser.add_argument("--Y_noise_std_scale", type=float, required=True, help="Scale factor for outcome noise as a multiple of average |tau| (treatment effect magnitude)")
+    parser.add_argument("--Y_noise_std_scale", type=float, help="Scale factor for outcome noise as a multiple of average |tau| (continuous only, required when outcome_type=continuous)")
     
     parser.add_argument("--kmeans_coef", type=float, help="Coefficient for k-means weighting")
-    
 
-    parser.add_argument("--DR_generation_method", type=str, choices=["mlp", "forest", "reg"],
-                        help="DR generation method (for DAST only)")
+    parser.add_argument("--DR_generation_method", type=str,
+                        choices=["reg", "mlp", "lightgbm", "random_forest", "xgboost"],
+                        help="DR generation method. 'reg': linear/logistic regression. 'mlp': neural network. "
+                             "'lightgbm': LightGBM. 'random_forest': sklearn RandomForest. 'xgboost': XGBoost.")
     
     # default is True
     parser.add_argument("--use_hybrid_method", type=lambda x: str(x).lower() == 'true', 

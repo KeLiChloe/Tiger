@@ -47,40 +47,6 @@ def structure_oracle(true_labels, pred_labels):
     return metrics
 
 
-def estimation_oracle(customers, algo):
-    """
-    Compute estimation accuracy metrics (treatment effect MSE).
-    
-    Parameters:
-    - customers: list of Customer objects, each with true and estimated segment
-    
-    Returns:
-    - dict with metrics: MSE_tau
-    """
-    tau_errors = []
-
-    for cust in customers:
-        # True and estimated parameters
-        true_seg = cust.true_segment
-        est_seg = cust.est_segment[algo]
-        
-        # Compare estimated tau vs true tau for the oracle's best action
-        # tau_true[action] is the true effect of taking action vs baseline
-        tau_true = true_seg.tau[true_seg.action]
-        if est_seg.est_action == 404:
-            tau_est = tau_true
-        else:
-            tau_est = est_seg.est_tau
-
-        # Treatment effect error
-        tau_errors.append((tau_est - tau_true) ** 2)
-
-    MSE_tau = np.mean(tau_errors)
-
-    return {
-        "MSE_tau": MSE_tau,
-    }
-
 def policy_oracle(customers, algo, signal_d=None):
     """
     Compute policy evaluation metrics:
@@ -111,13 +77,13 @@ def policy_oracle(customers, algo, signal_d=None):
 
         # Oracle action: best action for this segment (pre-computed from true tau)
         oracle_action = true_seg.action
-        oracle_profit_i = true_seg.generate_outcome(x_i, oracle_action, noise_std=0, signal_d=sd)
+        oracle_profit_i = true_seg.expected_outcome(x_i, oracle_action, signal_d=sd)
 
         # Manager policy
         if est_seg.est_action == 404:
             manager_profit_i = oracle_profit_i
         else:
-            manager_profit_i = true_seg.generate_outcome(x_i, est_seg.est_action, noise_std=0, signal_d=sd)
+            manager_profit_i = true_seg.expected_outcome(x_i, est_seg.est_action, signal_d=sd)
 
         # Mistreatment if manager’s action ≠ oracle
         if est_seg.est_action != oracle_action and est_seg.est_action != 404:

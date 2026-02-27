@@ -1,7 +1,7 @@
 from ground_truth import PopulationSimulator
 from plot import plot_ground_truth, plot_segmentation, plot_implementation_clustering
 from gmm import GMM_segment_and_estimate
-from oracle import structure_oracle, estimation_oracle, policy_oracle
+from oracle import structure_oracle, policy_oracle, policy_oracle_implementation
 import pandas as pd
 import numpy as np
 from policy_tree import policy_tree_segment_and_estimate, assign_new_customers_to_pruned_tree
@@ -181,10 +181,6 @@ def main(args):
     },
     
     **{algo: [] for algo in args.algorithms},
-        "X_overlap_score": [],
-        "y_overlap_score": [],
-        "X_y_overlap_score": [],
-        "ambiguity_score": [],
     }
 
 
@@ -238,13 +234,7 @@ def main(args):
         random.seed(92)
 
         
-        if args.compute_overlap:
-            X_overlap_score = pop.compute_covariate_overlap()
-            y_overlap_score = pop.compute_outcome_overlap()
-            X_y_overlap_score = pop.compute_joint_overlap()
-            ambiguity_score = pop.compute_assignment_ambiguity()
-            # print(f"X overlap score: {X_overlap_score:.4f}, (X, Y) overlap score: {X_y_overlap_score:.4f}, ambiguity score: {ambiguity_score:.4f}")
-        
+
         # plot ground truth
         if args.plot:
             df = pop.to_dataframe()
@@ -334,7 +324,6 @@ def main(args):
                     true_segment_ids_train = df['true_segment_id'].values[pop.train_indices]
                     est_segment_ids_train = df[f'{algo}_est_segment_id'].values[pop.train_indices]
                     S_metrics = structure_oracle(true_segment_ids_train, est_segment_ids_train)
-                    E_metrics = estimation_oracle(pop.pilot_customers, algo=algo)
                     P_metrics = policy_oracle(pop.pilot_customers, algo=algo) #TODO: apply to implement customers
                     
                     # Record all
@@ -491,12 +480,6 @@ def main(args):
         for algo in args.algorithms:
             exp_result_dict[algo].append(algo_result_dict[algo])
         
-        if args.compute_overlap:
-            exp_result_dict['X_overlap_score'].append(X_overlap_score)
-            exp_result_dict['y_overlap_score'].append(y_overlap_score)
-            exp_result_dict['X_y_overlap_score'].append(X_y_overlap_score)
-            exp_result_dict['ambiguity_score'].append(ambiguity_score)
-        
         # Deep comparison between DAST and KMeans if both are present
         if args.debug_comparison:
             compare_two_algorithms(pop, "dast", "mst")
@@ -515,15 +498,6 @@ def main(args):
     end_time = time.time()
     print(f"Total time taken: {end_time - start_time:.2f} seconds.")
 
-
-
-    # print mean value of overlap scores
-    if args.compute_overlap:
-        print(f"Average X overlap score: {np.mean(exp_result_dict['X_overlap_score']):.4f} ± {np.std(exp_result_dict['X_overlap_score']):.4f}")
-        print(f"Average Y overlap score: {np.mean(exp_result_dict['y_overlap_score']):.4f} ± {np.std(exp_result_dict['y_overlap_score']):.4f}")
-        print(f"Average (X, Y) overlap score: {np.mean(exp_result_dict['X_y_overlap_score']):.4f} ± {np.std(exp_result_dict['X_y_overlap_score']):.4f}")
-        print(f"Average ambiguity score: {np.mean(exp_result_dict['ambiguity_score']):.4f} ± {np.std(exp_result_dict['ambiguity_score']):.4f}")
-        
 
 
 if __name__ == "__main__":

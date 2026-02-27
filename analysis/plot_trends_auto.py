@@ -42,10 +42,6 @@ from scipy import stats
 IGNORE_KEYS_DEFAULT = {
     "dast",
     "exp_params",
-    "X_overlap_score",
-    "y_overlap_score",
-    "X_y_overlap_score",
-    "ambiguity_score",
     "seed",
 }
 
@@ -399,9 +395,9 @@ def plot_from_csv(
 
     ORDER = [
         "gmm-standard",
-        # "kmeans-standard",
-        # "mst", 
-        # "clr-standard", 
+        "kmeans-standard",
+        "mst", 
+        "clr-standard", 
         # "t_learner", 
         # "s_learner", 
         # "x_learner", 

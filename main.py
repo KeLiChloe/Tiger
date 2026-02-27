@@ -1,7 +1,7 @@
 from ground_truth import PopulationSimulator
 from plot import plot_ground_truth, plot_segmentation
 from gmm import GMM_segment_and_estimate
-from oracle import structure_oracle, estimation_oracle, policy_oracle
+from oracle import structure_oracle, policy_oracle
 import pandas as pd
 import numpy as np
 from policy_tree import policy_tree_segment_and_estimate, assign_new_customers_to_pruned_tree
@@ -32,9 +32,10 @@ def main(args, param_range):
     and evaluate implementation profits.
     '''
     
-    # Check if delta_range exists and is not None
-    include_interactions = hasattr(args, 'delta_range') and args.delta_range is not None
-    print(f"Include interactions: {include_interactions}")
+    outcome_type = args.outcome_type
+    # interaction terms only make sense for continuous outcome
+    include_interactions = (outcome_type == 'continuous') and hasattr(args, 'delta_range') and args.delta_range is not None
+    print(f"Outcome type: {outcome_type}, Include interactions: {include_interactions}")
     
     N_total_pilot_customers = args.N_segment_size * args.K
     N_total_implement_customers = int(N_total_pilot_customers * args.implementation_scale)
@@ -61,10 +62,6 @@ def main(args, param_range):
     },
     
     **{algo: [] for algo in args.algorithms},
-        "X_overlap_score": [],
-        "y_overlap_score": [],
-        "X_y_overlap_score": [],
-        "ambiguity_score": [],
         "seed": [],
     }
 
@@ -93,15 +90,9 @@ def main(args, param_range):
                                   args.partial_x,
                                   action_num=getattr(args, 'action_num', 2),
                                   X_noise_std_scale=args.X_noise_std_scale,
-                                  Y_noise_std_scale=args.Y_noise_std_scale,
-                                  disallowed_ball_radius=getattr(args, 'disallowed_ball_radius', None))
-        if args.compute_overlap:
-            X_overlap_score = pop.compute_covariate_overlap()
-            y_overlap_score = pop.compute_outcome_overlap()
-            X_y_overlap_score = pop.compute_joint_overlap()
-            ambiguity_score = pop.compute_assignment_ambiguity()
-            # print(f"X overlap score: {X_overlap_score:.4f}, (X, Y) overlap score: {X_y_overlap_score:.4f}, ambiguity score: {ambiguity_score:.4f}")
-        
+                                  Y_noise_std_scale=getattr(args, 'Y_noise_std_scale', None),
+                                  disallowed_ball_radius=getattr(args, 'disallowed_ball_radius', None),
+                                  outcome_type=outcome_type)
         # plot ground truth
         if args.plot:
             df = pop.to_dataframe()
@@ -200,7 +191,6 @@ def main(args, param_range):
                     true_segment_ids_train = df['true_segment_id'].values[pop.train_indices]
                     est_segment_ids_train = df[f'{algo}_est_segment_id'].values[pop.train_indices]
                     S_metrics = structure_oracle(true_segment_ids_train, est_segment_ids_train)
-                    E_metrics = estimation_oracle(pop.pilot_customers, algo=algo)
                     P_metrics = policy_oracle(pop.pilot_customers, algo=algo, signal_d=pop.signal_d)
                     
                     # Record all
@@ -350,12 +340,6 @@ def main(args, param_range):
             exp_result_dict[algo].append(algo_result_dict[algo])
         
         exp_result_dict['seed'].append(seed)
-        if args.compute_overlap:
-            exp_result_dict['X_overlap_score'].append(X_overlap_score)
-            exp_result_dict['y_overlap_score'].append(y_overlap_score)
-            exp_result_dict['X_y_overlap_score'].append(X_y_overlap_score)
-            exp_result_dict['ambiguity_score'].append(ambiguity_score)
-        
         
         # print(f"Oracle profits: {oracle_profits_implementation['oracle_profit']:.2f}")
 
@@ -374,14 +358,6 @@ def main(args, param_range):
 
 
 
-    # print mean value of overlap scores
-    if args.compute_overlap:
-        print(f"Average X overlap score: {np.mean(exp_result_dict['X_overlap_score']):.4f} ± {np.std(exp_result_dict['X_overlap_score']):.4f}")
-        print(f"Average Y overlap score: {np.mean(exp_result_dict['y_overlap_score']):.4f} ± {np.std(exp_result_dict['y_overlap_score']):.4f}")
-        print(f"Average (X, Y) overlap score: {np.mean(exp_result_dict['X_y_overlap_score']):.4f} ± {np.std(exp_result_dict['X_y_overlap_score']):.4f}")
-        print(f"Average ambiguity score: {np.mean(exp_result_dict['ambiguity_score']):.4f} ± {np.std(exp_result_dict['ambiguity_score']):.4f}")
-        
-
 
 if __name__ == "__main__":
     args_user = parse_args()
@@ -391,12 +367,61 @@ if __name__ == "__main__":
     print("==== Final Experiment Configuration ====")
     print(json.dumps(vars(merged_config), indent=4))
 
-    param_range = {
-        "alpha": tuple(merged_config.alpha_range),
-        "beta": tuple(merged_config.beta_range),
-        "tau": tuple(merged_config.tau_range),
-        "delta": tuple(merged_config.delta_range) if hasattr(merged_config, 'delta_range') and merged_config.delta_range is not None else None,
-        "x_mean": tuple(merged_config.x_mean_range),
-    }
+    if not hasattr(merged_config, 'outcome_type') or merged_config.outcome_type is None:
+        raise ValueError("outcome_type is required. Please specify 'continuous' or 'discrete' in config or via --outcome_type.")
+    outcome_type = merged_config.outcome_type
+
+    def _is_set(name):
+        return hasattr(merged_config, name) and getattr(merged_config, name) is not None
+
+    # ── Parameters that belong exclusively to each outcome type ──────────────
+    CONTINUOUS_ONLY = ['alpha_range', 'beta_range', 'tau_range', 'Y_noise_std_scale']
+    CONTINUOUS_OPTIONAL = ['delta_range']   # allowed but not required for continuous
+    DISCRETE_ONLY = ['p_range']
+
+    if outcome_type == 'continuous':
+        # Required params
+        for r in CONTINUOUS_ONLY + ['x_mean_range']:
+            if not _is_set(r):
+                raise ValueError(f"outcome_type='continuous' requires '{r}' to be set.")
+        # Forbidden params
+        for f in DISCRETE_ONLY:
+            if _is_set(f):
+                raise ValueError(
+                    f"'{f}' is only valid for outcome_type='discrete'. "
+                    f"Remove it when using outcome_type='continuous'."
+                )
+        param_range = {
+            "alpha": tuple(merged_config.alpha_range),
+            "beta":  tuple(merged_config.beta_range),
+            "tau":   tuple(merged_config.tau_range),
+            "delta": tuple(merged_config.delta_range) if _is_set('delta_range') else None,
+            "x_mean": tuple(merged_config.x_mean_range),
+            "p": None,
+        }
+
+    elif outcome_type == 'discrete':
+        # Required params
+        for r in DISCRETE_ONLY + ['x_mean_range']:
+            if not _is_set(r):
+                raise ValueError(f"outcome_type='discrete' requires '{r}' to be set.")
+        # Forbidden params
+        for f in CONTINUOUS_ONLY + CONTINUOUS_OPTIONAL:
+            if _is_set(f):
+                raise ValueError(
+                    f"'{f}' is only valid for outcome_type='continuous'. "
+                    f"Remove it when using outcome_type='discrete'."
+                )
+        param_range = {
+            "alpha": None,
+            "beta":  None,
+            "tau":   None,
+            "delta": None,
+            "x_mean": tuple(merged_config.x_mean_range),
+            "p": tuple(merged_config.p_range),
+        }
+
+    else:
+        raise ValueError(f"Unknown outcome_type: '{outcome_type}'. Must be 'continuous' or 'discrete'.")
 
     main(merged_config, param_range)
