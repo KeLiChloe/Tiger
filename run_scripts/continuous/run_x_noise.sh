@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SAVE_DIR="exp_feb_2026/varying_X_noise"
+SAVE_DIR="exp_feb_2026/continuous/varying_X_noise"
 mkdir -p "$SAVE_DIR"
 
 # 用整数循环避免浮点精度问题

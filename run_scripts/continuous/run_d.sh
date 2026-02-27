@@ -1,21 +1,18 @@
 #!/bin/bash
 
 # ===== 参数配置 =====
-SAVE_DIR="exp_feb_2026/varying_delta_range"
+SAVE_DIR="exp_feb_2026/continuous/varying_d"
 mkdir -p "$SAVE_DIR"
 
+
 # ===== 实验循环 =====
-# delta_range: (0,0) -> (-1,1), step=0.1
-for STEP in $(seq 1 0.2 2); do
-    STEP_FMT=$(printf "%.1f" "$STEP")
-    STEP_TAG=${STEP_FMT/./p}
+# varying d: 1 -> 15
+for D in $(seq 14 1 18); do
+    D_TAG=$(printf "%02d" "$D")
 
-    DELTA_LOW=$(python -c "print(-1 * float('$STEP_FMT'))")
-    DELTA_HIGH=$(python -c "print(float('$STEP_FMT'))")
+    echo "🚀 Running experiment with d=${D} ..."
 
-    echo "🚀 Running experiment with delta_range=(${DELTA_LOW}, ${DELTA_HIGH}) ..."
-
-    OUTFILE="${SAVE_DIR}/result_delta_${STEP_TAG}.pkl"
+    OUTFILE="${SAVE_DIR}/exp_d_${D_TAG}.pkl"
 
     python main.py \
         --disturb_covariate_noise 3 \
@@ -23,7 +20,7 @@ for STEP in $(seq 1 0.2 2); do
         --kmeans_coef 0.3 \
         --alpha_range -5 5 \
         --beta_range -5 5 \
-        --delta_range "$DELTA_LOW" "$DELTA_HIGH" \
+        --delta_range -0.8 0.8 \
         --tau_range -50 50 \
         --x_mean_range -30 30 \
         --N_segment_size 100 \
@@ -31,7 +28,7 @@ for STEP in $(seq 1 0.2 2); do
         --X_noise_std_scale 0.2 \
         --Y_noise_std_scale 0.15 \
         --K 5 \
-        --d 6 \
+        --d "$D" \
         --partial_x 1 \
         --N_sims 100 \
         --algorithms dast kmeans-standard gmm-standard clr-standard mst t_learner s_learner x_learner \
@@ -39,7 +36,7 @@ for STEP in $(seq 1 0.2 2); do
         --save_file "$OUTFILE" \
         --sequence_seed 92
 
-    echo "✅ Finished delta_range=(${DELTA_LOW}, ${DELTA_HIGH}). Saved to $OUTFILE"
+    echo "✅ Finished d=${D}. Saved to $OUTFILE"
     echo "----------------------------------------"
 done
 
