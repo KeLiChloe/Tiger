@@ -11,7 +11,7 @@ from kmeans import KMeans_segment_and_estimate
 from clr import CLR_segment_and_estimate
 from meta_learners import T_learner, S_learner, X_learner, DR_learner
 from causal_forest import causal_forest_predict
-from utils import assign_new_customers_to_segments, pick_M_for_algo, load_config, merge_config, parse_args
+from utils import assign_new_customers_to_segments, pick_M_for_algo, parse_args
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 from tqdm import trange
@@ -360,19 +360,15 @@ def main(args, param_range):
 
 
 if __name__ == "__main__":
-    args_user = parse_args()
-    config_yml = load_config(args_user.config)
-    merged_config = merge_config(args_user, config_yml)
-    
-    print("==== Final Experiment Configuration ====")
-    print(json.dumps(vars(merged_config), indent=4))
+    args = parse_args()
 
-    if not hasattr(merged_config, 'outcome_type') or merged_config.outcome_type is None:
-        raise ValueError("outcome_type is required. Please specify 'continuous' or 'discrete' in config or via --outcome_type.")
-    outcome_type = merged_config.outcome_type
+    print("==== Final Experiment Configuration ====")
+    print(json.dumps(vars(args), indent=4))
+
+    outcome_type = args.outcome_type
 
     def _is_set(name):
-        return hasattr(merged_config, name) and getattr(merged_config, name) is not None
+        return getattr(args, name, None) is not None
 
     # ── Parameters that belong exclusively to each outcome type ──────────────
     CONTINUOUS_ONLY = ['alpha_range', 'beta_range', 'tau_range', 'Y_noise_std_scale']
@@ -383,20 +379,20 @@ if __name__ == "__main__":
         # Required params
         for r in CONTINUOUS_ONLY + ['x_mean_range']:
             if not _is_set(r):
-                raise ValueError(f"outcome_type='continuous' requires '{r}' to be set.")
+                raise ValueError(f"outcome_type='continuous' requires '--{r}' to be set.")
         # Forbidden params
         for f in DISCRETE_ONLY:
             if _is_set(f):
                 raise ValueError(
-                    f"'{f}' is only valid for outcome_type='discrete'. "
+                    f"'--{f}' is only valid for outcome_type='discrete'. "
                     f"Remove it when using outcome_type='continuous'."
                 )
         param_range = {
-            "alpha": tuple(merged_config.alpha_range),
-            "beta":  tuple(merged_config.beta_range),
-            "tau":   tuple(merged_config.tau_range),
-            "delta": tuple(merged_config.delta_range) if _is_set('delta_range') else None,
-            "x_mean": tuple(merged_config.x_mean_range),
+            "alpha": tuple(args.alpha_range),
+            "beta":  tuple(args.beta_range),
+            "tau":   tuple(args.tau_range),
+            "delta": tuple(args.delta_range) if _is_set('delta_range') else None,
+            "x_mean": tuple(args.x_mean_range),
             "p": None,
         }
 
@@ -404,12 +400,12 @@ if __name__ == "__main__":
         # Required params
         for r in DISCRETE_ONLY + ['x_mean_range']:
             if not _is_set(r):
-                raise ValueError(f"outcome_type='discrete' requires '{r}' to be set.")
+                raise ValueError(f"outcome_type='discrete' requires '--{r}' to be set.")
         # Forbidden params
         for f in CONTINUOUS_ONLY + CONTINUOUS_OPTIONAL:
             if _is_set(f):
                 raise ValueError(
-                    f"'{f}' is only valid for outcome_type='continuous'. "
+                    f"'--{f}' is only valid for outcome_type='continuous'. "
                     f"Remove it when using outcome_type='discrete'."
                 )
         param_range = {
@@ -417,11 +413,11 @@ if __name__ == "__main__":
             "beta":  None,
             "tau":   None,
             "delta": None,
-            "x_mean": tuple(merged_config.x_mean_range),
-            "p": tuple(merged_config.p_range),
+            "x_mean": tuple(args.x_mean_range),
+            "p": tuple(args.p_range),
         }
 
     else:
         raise ValueError(f"Unknown outcome_type: '{outcome_type}'. Must be 'continuous' or 'discrete'.")
 
-    main(merged_config, param_range)
+    main(args, param_range)

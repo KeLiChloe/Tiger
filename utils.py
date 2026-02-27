@@ -4,9 +4,6 @@ from ground_truth import PopulationSimulator
 from sklearn.linear_model import LinearRegression
 import pandas as pd
 import plotly.graph_objects as go
-import os
-import yaml
-import json
 import argparse
 
 def build_design_matrix(x_array, D_array, include_interactions):
@@ -271,26 +268,9 @@ def pick_M_for_algo(algo, df_results_M):
 
 
 
-def load_config(config_path):
-    """Load configuration from YAML or JSON file."""
-    if not os.path.exists(config_path):
-        print(f"⚠️ Config file not found: {config_path}. Using defaults.")
-        return {}
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        if config_path.endswith(".yaml") or config_path.endswith(".yml"):
-            return yaml.safe_load(f)
-        elif config_path.endswith(".json"):
-            return json.load(f)
-        else:
-            raise ValueError("Unsupported config format. Use .yaml or .json")
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Simulation configuration for experiment")
 
-    parser.add_argument("--config", type=str, default="config.yml", help="Path to configuration file")
-    
     parser.add_argument("--plot", action="store_true", help="Enable plotting")
 
 
@@ -341,13 +321,4 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-
-from types import SimpleNamespace
-
-def merge_config(args, config):
-    merged = dict(config)
-    for key, value in vars(args).items():
-        if value is not None:
-            merged[key] = value
-    return SimpleNamespace(**merged)
 

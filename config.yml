@@ -1,4 +1,0 @@
-plot: false
-compute_overlap: false
-disturb_covariate_noise: 3
-kmeans_coef: 0.3
