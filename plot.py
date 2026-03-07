@@ -1,149 +1,248 @@
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import numpy as np
+import os
 
-import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
-import numpy as np
+# Markers for up to 8 actions
+_ACTION_MARKERS = ['o', 'x', '^', 's', 'D', 'v', 'P', '*']
 
-# optional parameters
-import matplotlib.pyplot as plt
-import numpy as np
 
 def plot_segmentation(labels, X, y_vec, D_vec, algo, M=None, tree=None):
     """
-    Visualize segmentation in 2D (x, y) with:
-        - Colors by segment
-        - Markers by treatment group
-        - Decision boundaries for tree-based methods (DAST, MST)
-    
-    Args:
-        tree: For DAST/MST, the tree object to extract split boundaries
+    Visualize segmentation with:
+      - Color per segment
+      - Marker per action (supports multi-action)
+      - 2D  when X has 1 feature  : x_0  vs outcome
+      - 3D  when X has ≥2 features : x_0 vs x_1 vs outcome
+      - Decision boundaries for tree-based methods (DAST, MST)
     """
+    os.makedirs("figures", exist_ok=True)
 
-    # what is X is multi-dimensional? In this case, we only plot the first dimension
-    X = np.ravel(X[:, 0])
-    y_vec = np.ravel(y_vec)
-    D_vec = np.ravel(D_vec)
+    labels  = np.ravel(labels).astype(int)
+    y_vec   = np.ravel(y_vec)
+    D_vec   = np.ravel(D_vec).astype(int)   # ensure 1-D regardless of (N,1) input
 
-    unique_labels = np.unique(labels)
-    label_to_color_idx = {label: i for i, label in enumerate(unique_labels)}
-    cmap = plt.cm.get_cmap("Set1", len(unique_labels))
-    markers = {0: 'o', 1: 'x'}
+    unique_labels  = sorted(np.unique(labels))
+    unique_actions = sorted(np.unique(D_vec))
 
-    # Axis limits
-    x_min, x_max = X.min(), X.max()
-    y_min, y_max = y_vec.min(), y_vec.max()
+    cmap = plt.colormaps.get_cmap("Set1").resampled(max(len(unique_labels), 2))
+    label_to_color  = {lab: cmap(i) for i, lab in enumerate(unique_labels)}
+    action_to_marker = {a: _ACTION_MARKERS[i % len(_ACTION_MARKERS)]
+                        for i, a in enumerate(unique_actions)}
 
-    plt.figure(figsize=(8, 6))
+    use_3d = X.ndim == 2 and X.shape[1] >= 2
 
-    # Scatter plot
-    for label in unique_labels:
-        for D in [0, 1]:
-            idx = (labels == label) & (D_vec == D)
-            color = cmap(label_to_color_idx[label])
-            plt.scatter(
-                X[idx],
-                y_vec[idx],
-                color=color,
-                marker=markers[D],
-                alpha=0.7,
-                s=20,
-                label=f"Seg {label}, D={D}"
-            )
+    # ── 3-D plot ──────────────────────────────────────────────────────────────
+    if use_3d:
+        x0, x1 = X[:, 0], X[:, 1]
 
-    # Draw decision boundaries for tree-based methods
-    if tree is not None and algo in ["dast", "mst"]:
-        splits = extract_tree_splits(tree)
-        # splits = [4,9,11.0]
-        for split_x in splits:
-            plt.axvline(x=split_x, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Decision boundary')
-        # Remove duplicate labels in legend
-        handles, labels_legend = plt.gca().get_legend_handles_labels()
-        by_label = dict(zip(labels_legend, handles))
-        plt.legend(by_label.values(), by_label.keys())
+        fig = plt.figure(figsize=(10, 8))
+        ax  = fig.add_subplot(111, projection='3d')
+
+        for lab in unique_labels:
+            for act in unique_actions:
+                idx = (labels == lab) & (D_vec == act)
+                if not np.any(idx):
+                    continue
+                ax.scatter(x0[idx], x1[idx], y_vec[idx],
+                           color=label_to_color[lab],
+                           marker=action_to_marker[act],
+                           alpha=0.6, s=18,
+                           label=f"Seg {lab}, D={act}")
+
+        # Decision planes for tree splits – clipped to each node's bounding box
+        if tree is not None and algo in ["dast", "mst"]:
+            splits = _extract_splits_all_features(tree)
+            x0_dmin, x0_dmax = x0.min(), x0.max()
+            x1_dmin, x1_dmax = x1.min(), x1.max()
+            y_dmin,  y_dmax  = y_vec.min(), y_vec.max()
+            plane_colors = {0: 'red', 1: 'steelblue'}
+
+            for feat, thresh, bbox in splits:
+                # Clip bbox to actual data range
+                x0_lo = max(bbox.get(0, (-np.inf, np.inf))[0], x0_dmin)
+                x0_hi = min(bbox.get(0, (-np.inf, np.inf))[1], x0_dmax)
+                x1_lo = max(bbox.get(1, (-np.inf, np.inf))[0], x1_dmin)
+                x1_hi = min(bbox.get(1, (-np.inf, np.inf))[1], x1_dmax)
+
+                if feat == 0:
+                    # Plane x0 = thresh, spanning clipped x1 range and full y
+                    g1, gy = np.meshgrid(np.linspace(x1_lo, x1_hi, 3),
+                                         np.linspace(y_dmin, y_dmax, 3))
+                    g0 = np.full_like(g1, thresh)
+                    ax.plot_surface(g0, g1, gy, alpha=0.15,
+                                    color=plane_colors.get(feat, 'gray'))
+                elif feat == 1:
+                    # Plane x1 = thresh, spanning clipped x0 range and full y
+                    g0, gy = np.meshgrid(np.linspace(x0_lo, x0_hi, 3),
+                                         np.linspace(y_dmin, y_dmax, 3))
+                    g1_surf = np.full_like(g0, thresh)
+                    ax.plot_surface(g0, g1_surf, gy, alpha=0.15,
+                                    color=plane_colors.get(feat, 'gray'))
+
+        ax.set_xlabel("x_0"); ax.set_ylabel("x_1"); ax.set_zlabel("outcome")
+        ax.set_title(f"{algo.upper()}-Based Segmentation (3D), M={M}")
+
+    # ── 2-D plot ──────────────────────────────────────────────────────────────
     else:
-        plt.legend()
+        x0 = X[:, 0] if X.ndim == 2 else np.ravel(X)
 
-    plt.xlabel("x_1")
-    plt.ylabel("outcome")
-    plt.title(f"{algo.upper()}-Based Segmentation")
-    plt.axhline(0, color='gray', linestyle='--', linewidth=0.5)
-    plt.xlim(x_min, x_max)
-    plt.ylim(y_min, y_max)
-    plt.grid(True)
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        for lab in unique_labels:
+            for act in unique_actions:
+                idx = (labels == lab) & (D_vec == act)
+                if not np.any(idx):
+                    continue
+                ax.scatter(x0[idx], y_vec[idx],
+                           color=label_to_color[lab],
+                           marker=action_to_marker[act],
+                           alpha=0.7, s=20,
+                           label=f"Seg {lab}, D={act}")
+
+        if tree is not None and algo in ["dast", "mst"]:
+            x0_dmin, x0_dmax = x0.min(), x0.max()
+            y_dmin,  y_dmax  = y_vec.min(), y_vec.max()
+            for feat, thresh, bbox in _extract_splits_all_features(tree):
+                if feat != 0:
+                    continue
+                # Clip the line's y-extent to customers in this node's x0 region
+                x0_lo = max(bbox.get(0, (-np.inf, np.inf))[0], x0_dmin)
+                x0_hi = min(bbox.get(0, (-np.inf, np.inf))[1], x0_dmax)
+                mask  = (x0 >= x0_lo) & (x0 <= x0_hi)
+                y_lo  = y_vec[mask].min() if mask.any() else y_dmin
+                y_hi  = y_vec[mask].max() if mask.any() else y_dmax
+                ax.plot([thresh, thresh], [y_lo, y_hi],
+                        color='red', linestyle='--', linewidth=1.8,
+                        alpha=0.8, label='split')
+
+        ax.set_xlabel("x_0");  ax.set_ylabel("outcome")
+        ax.set_title(f"{algo.upper()}-Based Segmentation, M={M}")
+        ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
+        ax.grid(True, alpha=0.4)
+
+    # Deduplicated legend
+    handles, leg_labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(leg_labels, handles))
+    ax.legend(by_label.values(), by_label.keys(), fontsize=7, ncol=2, loc='best')
+
     plt.tight_layout()
-    # print(f"figures/{algo}_segmentation_{M}.png")
     plt.savefig(f"figures/{algo}_segmentation_{M}.png", dpi=300)
-    plt.close()  # Close the figure to free memory
+    plt.close()
+
+
+def _extract_splits_all_features(tree):
+    """Return list of (feature_idx, threshold, bbox) for every internal split.
+
+    bbox is a dict {feature_idx: (lo, hi)} representing the axis-aligned region
+    that the node is responsible for.  Infinite bounds mean "no constraint yet".
+    The split plane / line should only be drawn within this region.
+    """
+    splits = []
+
+    def traverse(node, bbox):
+        if node is None or node.is_leaf:
+            return
+        feat   = node.split_feature
+        thresh = node.split_threshold
+        splits.append((feat, thresh, dict(bbox)))
+
+        lo, hi = bbox.get(feat, (-np.inf, np.inf))
+
+        left_bbox = dict(bbox)
+        left_bbox[feat] = (lo, thresh)
+        traverse(node.left, left_bbox)
+
+        right_bbox = dict(bbox)
+        right_bbox[feat] = (thresh, hi)
+        traverse(node.right, right_bbox)
+
+    traverse(tree.root, {})
+    return splits
 
 
 def extract_tree_splits(tree):
+    """Return sorted split thresholds on feature 0 only (legacy 1-D helper)."""
+    return sorted(t for f, t, _ in _extract_splits_all_features(tree) if f == 0)
+
+
+
+def plot_ground_truth(df, title="Ground-Truth Segmentation",
+                      segment_col='true_segment_id',
+                      x_col='x_0', x2_col='x_1',
+                      y_col='outcome', D_col='D_i'):
     """
-    Extract all split thresholds from a tree (for plotting decision boundaries).
-    
-    Args:
-        tree: DASTree or MSTree object
-        
-    Returns:
-        List of split thresholds (x values where splits occur)
+    Plot ground-truth segmentation.
+      - Color per true segment
+      - Marker per action (multi-action supported)
+      - 2D when x2_col is absent: x_0 vs outcome
+      - 3D when x2_col exists  : x_0 vs x_1 vs outcome
+
+    Parameters
+    ----------
+    df         : DataFrame from pop.to_dataframe()
+    x2_col     : second covariate column for 3D; set to None to force 2D
     """
-    splits = []
-    
-    def traverse(node):
-        if node is None or node.is_leaf:
-            return
-        # Only extract splits on the first feature (dimension 0) for 1D plotting
-        if node.split_feature == 0:
-            splits.append(node.split_threshold)
-        traverse(node.left)
-        traverse(node.right)
-    
-    traverse(tree.root)
-    return sorted(splits)
-    # return [7, 12]
+    os.makedirs("figures", exist_ok=True)
 
+    segments       = sorted(df[segment_col].unique())
+    unique_actions = sorted(df[D_col].unique())
 
+    cmap = plt.colormaps.get_cmap("Set1").resampled(max(len(segments), 2))
+    seg_to_color    = {k: cmap(i) for i, k in enumerate(segments)}
+    action_to_marker = {a: _ACTION_MARKERS[i % len(_ACTION_MARKERS)]
+                        for i, a in enumerate(unique_actions)}
 
-def plot_ground_truth(df, title="Ground-Truth Segmentation", segment_col='true_segment_id', x_col='x_0', y_col='outcome', D_col='D_i'):
-    """
-    Plot outcome Y_i vs. covariate x_i in 1D simulation.
-    
-    Parameters:
-    - df: pandas DataFrame with columns x_col, y_col, segment_col, D_col
-    - title: plot title
-    - segment_col: column indicating true segment membership
-    - x_col: covariate column name (should be scalar)
-    - y_col: outcome column name
-    - D_col: binary treatment indicator column name
-    """
-    plt.figure(figsize=(8, 6
-                        ))
-    colors = ['red', 'green', 'blue', 'purple', 'orange', 'brown']  # extendable for >3 segments
-    markers = {0: 'o', 1: 'x'}
+    use_3d = (x2_col is not None) and (x2_col in df.columns)
 
-    segments = sorted(df[segment_col].unique())
-    for k in segments:
-        for D_i in [0, 1]:
-            subset = df[(df[segment_col] == k) & (df[D_col] == D_i)]
-            plt.scatter(
-                subset[x_col],
-                subset[y_col],
-                color=colors[k % len(colors)],
-                marker=markers[D_i],
-                alpha=0.7,
-                label=f"Segment {k}, D={D_i}"
-            )
+    if use_3d:
+        fig = plt.figure(figsize=(10, 8))
+        ax  = fig.add_subplot(111, projection='3d')
 
-    plt.title(title, fontsize=20)
-    plt.xlabel(f"${x_col}$", fontsize=16)
-    plt.ylabel(f"${y_col}$", fontsize=16)
-    plt.axhline(0, color='gray', linestyle='--', linewidth=0.5)
-    plt.legend()
-    plt.grid(True)
+        for k in segments:
+            for a in unique_actions:
+                subset = df[(df[segment_col] == k) & (df[D_col] == a)]
+                if subset.empty:
+                    continue
+                ax.scatter(subset[x_col], subset[x2_col], subset[y_col],
+                           color=seg_to_color[k],
+                           marker=action_to_marker[a],
+                           alpha=0.6, s=18,
+                           label=f"Seg {k}, D={a}")
+
+        ax.set_xlabel(f"${x_col}$",  fontsize=12)
+        ax.set_ylabel(f"${x2_col}$", fontsize=12)
+        ax.set_zlabel(f"${y_col}$",  fontsize=12)
+
+    else:
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        for k in segments:
+            for a in unique_actions:
+                subset = df[(df[segment_col] == k) & (df[D_col] == a)]
+                if subset.empty:
+                    continue
+                ax.scatter(subset[x_col], subset[y_col],
+                           color=seg_to_color[k],
+                           marker=action_to_marker[a],
+                           alpha=0.7, s=20,
+                           label=f"Seg {k}, D={a}")
+
+        ax.set_xlabel(f"${x_col}$", fontsize=16)
+        ax.set_ylabel(f"${y_col}$", fontsize=16)
+        ax.axhline(0, color='gray', linestyle='--', linewidth=0.5)
+        ax.grid(True, alpha=0.4)
+
+    ax.set_title(title, fontsize=16)
+
+    handles, leg_labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(leg_labels, handles))
+    ax.legend(by_label.values(), by_label.keys(), fontsize=7, ncol=2, loc='best')
+
     plt.tight_layout()
     plt.savefig("figures/ground_truth_plot.png", dpi=300)
-    plt.close()  # Close the figure to free memory
+    plt.close()
 
 
 def plot_implementation_clustering(implement_customers, algo, title=None):

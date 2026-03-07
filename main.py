@@ -41,10 +41,18 @@ def main(args, param_range):
     N_total_implement_customers = int(N_total_pilot_customers * args.implementation_scale)
     M_range = list(range(max(2, args.K-3), args.K+4))
 
+    # Fix the random seed generator to get reproducible seed sequences
+    if args.sequence_seed is not None:
+        random.seed(args.sequence_seed)
+    else:
+        sequence_seed = random.randint(0, 100000)
+        random.seed(sequence_seed)
+    
+    print(f"Using fixed sequence seed: {args.sequence_seed if args.sequence_seed is not None else sequence_seed}")
 
     exp_result_dict = {
     "exp_params": {
-        "sequence_seed": args.sequence_seed,
+        "sequence_seed": args.sequence_seed if args.sequence_seed is not None else sequence_seed,
         "action_num": getattr(args, 'action_num', 2),
         "K": args.K,
         "d": args.d,
@@ -68,10 +76,7 @@ def main(args, param_range):
 
     start_time = time.time()
     
-    # Fix the random seed generator to get reproducible seed sequences
-    if args.sequence_seed is not None:
-        random.seed(args.sequence_seed)
-        print(f"Using fixed sequence seed: {args.sequence_seed}")
+    
 
     for _ in trange(args.N_sims):
         
@@ -107,16 +112,16 @@ def main(args, param_range):
                 if algo in ["clr-standard", "kmeans-standard", "gmm-standard"]:
                     train_frac=1
                 else:
-                    train_frac=0.75
+                    train_frac=0.7
                 
                 pop.split_pilot_customers_into_train_and_validate(train_frac=train_frac)
                 x_mat_tr = np.array([cust.x for cust in pop.train_customers])
-                D_vec_tr = np.array([cust.D_i for cust in pop.train_customers]).reshape(-1, 1)
-                y_vec_tr = np.array([cust.y for cust in pop.train_customers]).reshape(-1, 1)
+                D_vec_tr = np.array([cust.D_i for cust in pop.train_customers])
+                y_vec_tr = np.array([cust.y for cust in pop.train_customers])
                 
                 x_mat_val = np.array([cust.x for cust in pop.val_customers])
-                D_vec_val = np.array([cust.D_i for cust in pop.val_customers]).reshape(-1, 1)
-                y_vec_val = np.array([cust.y for cust in pop.val_customers]).reshape(-1, 1)
+                D_vec_val = np.array([cust.D_i for cust in pop.val_customers])
+                y_vec_val = np.array([cust.y for cust in pop.val_customers])
                 
                 results_M = []
                 
@@ -144,16 +149,16 @@ def main(args, param_range):
                     # 4. Return labels and validation score
                     
                     if algo == "gmm-standard":
-                        bic_gmm, _ = GMM_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)
+                        bic_gmm, _ = GMM_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                     
                     elif algo == "gmm-da":
-                        DA_score_gmm, _ = GMM_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)
+                        DA_score_gmm, _ = GMM_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                         
                     elif algo == "kmeans-standard":
-                        silhouette_score, _ = KMeans_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)
+                        silhouette_score, _ = KMeans_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                     
                     elif algo == "kmeans-da":
-                        DA_score_kmeans, _ = KMeans_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)
+                        DA_score_kmeans, _ = KMeans_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                     
                     elif algo == "clr-standard":
                         bic_clr, _ = CLR_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, kmeans_coef=args.kmeans_coef, num_tries=8, algo=algo, include_interactions=include_interactions, random_state=seed)
@@ -165,7 +170,7 @@ def main(args, param_range):
                         dast_tree, dast_val_score, segment_dict = DAST_segment_and_estimate(pop, M, max_depth=depth_dast, min_leaf_size=2,  algo=algo, include_interactions=include_interactions, use_hybrid_method=args.use_hybrid_method)
                     
                     elif algo == "mst":
-                        mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, threshold_grid=30, algo=algo, include_interactions=include_interactions)
+                        mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, algo=algo, include_interactions=include_interactions)
                         
                     elif algo == "policy_tree":
                         policy_tree_val_score, _, _ = policy_tree_segment_and_estimate(pop, depth_policy_tree, M, x_mat_tr, D_vec_tr, y_vec_tr, x_mat_val, D_vec_val, y_vec_val,include_interactions=include_interactions, use_hybrid_method=False, )
@@ -178,7 +183,7 @@ def main(args, param_range):
                     # plot segmentation 
                     df = pop.to_dataframe()
                     labels = df[f'{algo}_est_segment_id'][:int(N_total_pilot_customers * train_frac)]
-                    if args.plot:
+                    if args.plot and algo in ["dast", "kmeans-standard", "mst"]:
                         # Pass tree object for DAST/MST to plot decision boundaries
                         tree_obj = None
                         if algo == "dast":
@@ -254,17 +259,17 @@ def main(args, param_range):
                 # Retrain and assign implementation customers to segments  
             
                 pop.split_pilot_customers_into_train_and_validate(train_frac=1)
-                x_mat_tr = np.array([cust.x for cust in pop.train_customers])
-                D_vec_tr = np.array([cust.D_i for cust in pop.train_customers])
-                y_vec_tr = np.array([cust.y for cust in pop.train_customers])
+                # x_mat_pilot = np.array([cust.x for cust in pop.pilot_customers])
+                # D_vec_pilot = np.array([cust.D_i for cust in pop.pilot_customers])
+                # y_vec_pilot = np.array([cust.y for cust in pop.pilot_customers])
                 
                 algo_picked_M = picked_M[f'{algo}_picked_M']
                 if algo == "gmm-standard":
-                    bic_gmm, gmm_model = GMM_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)  
+                    bic_gmm, gmm_model = GMM_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                     assign_new_customers_to_segments(pop, pop.implement_customers, gmm_model, algo)
-                
+
                 elif algo == "gmm-da":
-                    DA_score_gmm, gmm_model = GMM_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)  
+                    DA_score_gmm, gmm_model = GMM_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                     assign_new_customers_to_segments(pop, pop.implement_customers, gmm_model, algo)
                 
                 elif algo == "policy_tree":
@@ -279,15 +284,15 @@ def main(args, param_range):
                 
                 elif algo == "mst":
                     depth_mst = 1 if algo_picked_M <= 2 else (2 if algo_picked_M <=4 else (3 if algo_picked_M <= 6 else 4))
-                    optimal_mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, algo_picked_M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, threshold_grid=30, algo=algo, include_interactions=include_interactions)
+                    optimal_mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, algo_picked_M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, algo=algo, include_interactions=include_interactions)
                     optimal_mst_tree.predict_segment(pop.implement_customers, segment_dict)
                 
                 elif algo == "kmeans-standard":
-                    silhouette_score, kmeans_model = KMeans_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)
+                    silhouette_score, kmeans_model = KMeans_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                     assign_new_customers_to_segments(pop, pop.implement_customers, kmeans_model, algo)
-                
+
                 elif algo == "kmeans-da":
-                    DA_score_kmeans, kmeans_model = KMeans_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed)
+                    DA_score_kmeans, kmeans_model = KMeans_segment_and_estimate(pop, algo_picked_M, x_mat_tr, D_vec_tr, y_vec_tr, algo, include_interactions, random_state=seed, is_discrete=(outcome_type=='discrete'))
                     assign_new_customers_to_segments(pop, pop.implement_customers, kmeans_model, algo)
                 
                 elif algo == "clr-standard":
@@ -321,7 +326,9 @@ def main(args, param_range):
                         implementation_outcome += cust.evaluate_profits(algo, implement_action)
                     else:
                         implementation_outcome += cust.evaluate_profits(algo)
-                print(f"Implementation outcome for {algo}: {implementation_outcome:.2f} with chosen M = {algo_picked_M}")
+
+                print(f"Implementation outcome for {algo}: {implementation_outcome:.2f} "
+                      f"with chosen M = {algo_picked_M}")
                 algo_result_dict[algo]['implementation_profits'] = implementation_outcome
                 
                 
@@ -367,51 +374,57 @@ if __name__ == "__main__":
     def _is_set(name):
         return getattr(args, name, None) is not None
 
-    # ── Parameters that belong exclusively to each outcome type ──────────────
-    CONTINUOUS_ONLY = ['alpha_range', 'beta_range', 'tau_range', 'Y_noise_std_scale']
-    CONTINUOUS_OPTIONAL = ['delta_range']   # allowed but not required for continuous
-    DISCRETE_ONLY = ['p_range']
+    # ── Parameter requirements per outcome type ──────────────────────────────
+    # beta/tau/x_mean are shared; alpha is continuous-only; target_p is discrete-only
+    SHARED_REQUIRED  = ['beta_range', 'tau_range', 'x_mean_range']
+    SHARED_OPTIONAL  = ['delta_range']       # treatment-covariate interactions, optional for both
+    CONTINUOUS_ONLY  = ['alpha_range', 'Y_noise_std_scale']
+    DISCRETE_ONLY    = ['target_p_range']    # back-computes alpha per segment
+
+    for r in SHARED_REQUIRED:
+        if not _is_set(r):
+            raise ValueError(f"'--{r}' is required for both outcome types.")
 
     if outcome_type == 'continuous':
-        # Required params
-        for r in CONTINUOUS_ONLY + ['x_mean_range']:
+        for r in CONTINUOUS_ONLY:
             if not _is_set(r):
                 raise ValueError(f"outcome_type='continuous' requires '--{r}' to be set.")
-        # Forbidden params
-        for f in DISCRETE_ONLY:
-            if _is_set(f):
-                raise ValueError(
-                    f"'--{f}' is only valid for outcome_type='discrete'. "
-                    f"Remove it when using outcome_type='continuous'."
-                )
+        if _is_set('target_p_range'):
+            raise ValueError("'--target_p_range' is only valid for outcome_type='discrete'.")
         param_range = {
-            "alpha": tuple(args.alpha_range),
-            "beta":  tuple(args.beta_range),
-            "tau":   tuple(args.tau_range),
-            "delta": tuple(args.delta_range) if _is_set('delta_range') else None,
-            "x_mean": tuple(args.x_mean_range),
-            "p": None,
+            "alpha":    tuple(args.alpha_range),
+            "beta":     tuple(args.beta_range),
+            "tau":      tuple(args.tau_range),
+            "delta":    tuple(args.delta_range) if _is_set('delta_range') else None,
+            "x_mean":   tuple(args.x_mean_range),
+            "target_p": None,
         }
 
     elif outcome_type == 'discrete':
-        # Required params
-        for r in DISCRETE_ONLY + ['x_mean_range']:
-            if not _is_set(r):
-                raise ValueError(f"outcome_type='discrete' requires '--{r}' to be set.")
-        # Forbidden params
-        for f in CONTINUOUS_ONLY + CONTINUOUS_OPTIONAL:
-            if _is_set(f):
-                raise ValueError(
-                    f"'--{f}' is only valid for outcome_type='continuous'. "
-                    f"Remove it when using outcome_type='discrete'."
-                )
+        if not _is_set('target_p_range'):
+            raise ValueError(
+                "outcome_type='discrete' requires '--target_p_range lo hi'. "
+                "This sets P(Y=1 | x=x_mean, D=0) per segment; alpha is back-computed automatically."
+            )
+        if _is_set('alpha_range'):
+            raise ValueError(
+                "'--alpha_range' is not used for outcome_type='discrete'. "
+                "Use '--target_p_range' to control outcome sparsity instead."
+            )
+        if _is_set('Y_noise_std_scale'):
+            raise ValueError(
+                "'--Y_noise_std_scale' is only valid for outcome_type='continuous'."
+            )
+        lo, hi = args.target_p_range
+        if not (0 < lo < hi < 1):
+            raise ValueError(f"--target_p_range must satisfy 0 < lo < hi < 1, got {lo} {hi}.")
         param_range = {
-            "alpha": None,
-            "beta":  None,
-            "tau":   None,
-            "delta": None,
-            "x_mean": tuple(args.x_mean_range),
-            "p": tuple(args.p_range),
+            "alpha":    None,           # will be back-computed from target_p per segment
+            "beta":     tuple(args.beta_range),
+            "tau":      tuple(args.tau_range),
+            "delta":    tuple(args.delta_range) if _is_set('delta_range') else None,
+            "x_mean":   tuple(args.x_mean_range),
+            "target_p": tuple(args.target_p_range),
         }
 
     else:

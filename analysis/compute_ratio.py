@@ -23,6 +23,9 @@ def print_params(data):
         'N_segment_size': data.get('exp_params').get('N_segment_size'),
         'implementation_scale': data.get('exp_params').get('implementation_scale', 1),
         'disallowed_ball_radius': data.get('exp_params').get('disallowed_ball_radius'),
+        'outcome_type': data.get('exp_params').get('outcome_type'),
+        'alpha_range': data.get('exp_params').get('param_range', {}).get('alpha'),
+        'tau_range':   data.get('exp_params').get('param_range', {}).get('tau'),
         'sequence_seed': data.get('exp_params').get('sequence_seed'),
     }
         
@@ -269,7 +272,7 @@ def filter_ratios(improvement_ratios, apply_remove_extreme, apply_sigma_clip):
     return filtered_ratios
 
 # === Load Data ===
-file_path = "exp_feb_2026/varying_d/exp_d_03.pkl"  # Make sure this is the correct path on your machine7
+file_path = "exp_feb_2026/discrete/varying_d_set5/exp_d_02.pkl"  # Make sure this is the correct path on your machine7
 with open(file_path, "rb") as f:
     data = pickle.load(f)
 
@@ -297,6 +300,7 @@ apply_remove_extreme = {
                         "dr_learner": True,
                         "s_learner": True,
                         "policy_tree": True,
+                        "causal_forest": True,
                         }
 apply_sigma_clip = False
 

@@ -3,18 +3,18 @@
 import numpy as np
 from ground_truth import SegmentEstimate, PopulationSimulator
 from utils import estimate_segment_parameters, evaluate_on_validation, build_design_matrix
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
 
 import random
 
 
 
-def compute_residual_value(X, Y, D, indices, include_interactions, action_num=None):
+def compute_residual_value(X, Y, D, indices, include_interactions, action_num=None, is_discrete=False):
     # Subset the data
     X_m = X[indices]
     D_m = D[indices].reshape(-1, 1)
     Y_m = Y[indices].reshape(-1, 1)
-    
+
     # Strict check: all actions 0..action_num-1 must be present
     if action_num is not None:
         unique_actions_in_data = np.unique(D_m)
@@ -22,20 +22,36 @@ def compute_residual_value(X, Y, D, indices, include_interactions, action_num=No
             if a not in unique_actions_in_data:
                 return np.inf
 
-    # Construct the design matrix: [intercept | X | D]
+    # Construct the design matrix: [intercept | X | D | (X*D)]
     X_design = build_design_matrix(X_m, D_m, include_interactions)
-    
-    # Fit the linear model
-    model = LinearRegression(fit_intercept=False).fit(X_design, Y_m)
-    
-    # Predict
-    Y_pred = model.predict(X_design)
 
-    # Compute residuals
-    residuals = np.sum((Y_m - Y_pred) ** 2) + np.random.rand() * 1e-6  # small noise to avoid zero residuals
+    if is_discrete:
+        y_flat = Y_m.ravel().astype(int)
 
-    # return residuals / len(indices)
-    return residuals # corrected: return total residuals
+        # Pure node: all labels identical → deviance ≈ 0 (perfect fit)
+        if len(np.unique(y_flat)) == 1:
+            return 0.0
+
+        model = LogisticRegression(fit_intercept=False, solver='lbfgs', max_iter=200)
+        try:
+            model.fit(X_design, y_flat)
+            proba = model.predict_proba(X_design) + np.random.uniform(-1,1)
+            # Clip row-wise: index by the true label to get P(y=y_i | x_i)
+            p_true = np.clip(proba[np.arange(len(y_flat)), y_flat], 1e-9, 1 - 1e-9)
+            # Return negative log-likelihood (lower = better fit, consistent with RSS)
+            return -np.sum(np.log(p_true))
+        except Exception:
+            # Fallback: null-model deviance (intercept only)
+            p_mean = np.clip(np.mean(y_flat), 1e-9, 1 - 1e-9)
+            return -np.sum(y_flat * np.log(p_mean) + (1 - y_flat) * np.log(1 - p_mean))
+
+    else:
+        # Continuous: fit OLS, return residual sum of squares
+        y_flat = Y_m.ravel()
+        model = LinearRegression(fit_intercept=False)
+        model.fit(X_design, y_flat)
+        residuals = y_flat - model.predict(X_design)
+        return np.sum(residuals ** 2)
 
 class MSTNode:
     def __init__(self, indices, depth=0):
@@ -56,7 +72,7 @@ class MSTNode:
         self.is_leaf = True
 
 class MSTree:
-    def __init__(self, x, y, D, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo, action_num=None):
+    def __init__(self, x, y, D, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo, action_num, is_discrete=False):
         self.x = x
         self.y = y
         self.D = D
@@ -67,9 +83,10 @@ class MSTree:
 
         self.root = None
         self.leaf_nodes = []
-        
+
         self.algo = algo
         self.action_num = action_num
+        self.is_discrete = is_discrete
 
 
     def build(self, include_interactions):
@@ -133,7 +150,7 @@ class MSTree:
 
     def _grow_node(self, indices, depth, include_interactions):
         node = MSTNode(indices, depth)
-        node.value = compute_residual_value(self.x, self.y, self.D, indices, include_interactions, self.action_num)
+        node.value = compute_residual_value(self.x, self.y, self.D, indices, include_interactions, self.action_num, self.is_discrete)
 
         if depth == self.max_depth:
             self.leaf_nodes.append(node)
@@ -148,8 +165,8 @@ class MSTree:
                 right_idx = indices[self.x[indices, j] > t]
 
                 if self._check_leaf_constraints(left_idx) and self._check_leaf_constraints(right_idx):
-                    left_val = compute_residual_value(self.x, self.y, self.D, left_idx, include_interactions, self.action_num)
-                    right_val = compute_residual_value(self.x, self.y, self.D, right_idx, include_interactions, self.action_num)
+                    left_val = compute_residual_value(self.x, self.y, self.D, left_idx, include_interactions, self.action_num, self.is_discrete)
+                    right_val = compute_residual_value(self.x, self.y, self.D, right_idx, include_interactions, self.action_num, self.is_discrete)
                     gain = node.value - (left_val + right_val)
                     valid_splits.append((gain, j, t, left_idx, right_idx))
 
@@ -250,7 +267,7 @@ class MSTree:
 
 
 
-def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, min_leaf_size, epsilon, threshold_grid, algo, include_interactions):
+def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, min_leaf_size, epsilon,  algo, include_interactions, threshold_grid=None):
     # Prepare training data
     data_train = {
         "X": np.array([cust.x for cust in pop.train_customers]),
@@ -261,7 +278,7 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
     
     # Generate candidate thresholds using quantile-based binning
     # Use B bins to reduce computational cost
-    B = threshold_grid if threshold_grid > 0 else 20  # Use threshold_grid as number of bins
+    B = 10  # Use threshold_grid as number of bins
     H = {}
     for j in range(data_train["X"].shape[1]):
         sorted_values = np.sort(np.unique(data_train["X"][:, j]))
@@ -289,7 +306,8 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
         epsilon=epsilon,
         max_depth=max_depth,
         algo=algo,
-        action_num=pop.action_num
+        action_num=pop.action_num,
+        is_discrete=(pop.outcome_type == 'discrete'),
     )
     tree.build(include_interactions)
     

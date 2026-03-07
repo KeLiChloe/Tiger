@@ -21,8 +21,8 @@ from econml.dml import CausalForestDML
 
 
 def causal_forest_predict(implement_customers, x_mat, D_vec, y_vec, 
-                          n_estimators=12, n_estimators_nuisance=12, 
-                          min_samples_leaf=5, max_depth=None):
+                          n_estimators=4, n_estimators_nuisance=4, 
+                          min_samples_leaf=10, max_depth=3):
     """
     Causal Forest implementation using econml's CausalForestDML.
     
@@ -63,6 +63,10 @@ def causal_forest_predict(implement_customers, x_mat, D_vec, y_vec,
         Action identity mapping: action_identity[i] = i
     """
     from sklearn.ensemble import RandomForestRegressor
+    
+    x_mat = x_mat[::2]  # Use every 2nd sample for faster execution (debugging)
+    D_vec = D_vec[::2]
+    y_vec = y_vec[::2]
     
     # Identify unique actions
     unique_actions = np.unique(D_vec)

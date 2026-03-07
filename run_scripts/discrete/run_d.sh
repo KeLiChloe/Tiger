@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===== 参数配置 =====
-SAVE_DIR="exp_feb_2026/discrete/varying_d"
+SAVE_DIR="exp_feb_2026/discrete/varying_d_set5"
 mkdir -p "$SAVE_DIR"
 
 # ===== 实验循环 =====
@@ -13,25 +13,29 @@ for D in $(seq 1 1 15); do
 
     OUTFILE="${SAVE_DIR}/exp_d_${D_TAG}.pkl"
 
+    # Discrete logistic model: p = sigmoid(alpha + beta@x + tau[D])
     python main.py \
         --outcome_type discrete \
-        --p_range 0.1 0.6 \
+        --target_p_range 0.005 0.2 \
+        --beta_range -1 1 \
+        --tau_range -0.5 1 \
+        --delta_range -1 1 \
         --disturb_covariate_noise 3 \
         --DR_generation_method lightgbm \
-        --kmeans_coef 0.3 \
-        --x_mean_range -30 30 \
+        --kmeans_coef 0.15 \
+        --x_mean_range -20 20 \
         --N_segment_size 100 \
-        --implementation_scale 5 \
-        --X_noise_std_scale 0.2 \
+        --implementation_scale 10 \
+        --X_noise_std_scale 0.25 \
         --K 5 \
         --d "$D" \
         --partial_x 1 \
-        --action_num 2 \
+        --action_num 3 \
         --N_sims 100 \
-        --algorithms dast kmeans-standard gmm-standard clr-standard mst t_learner s_learner x_learner \
-        --disallowed_ball_radius 0.3 \
+        --algorithms dast kmeans-standard gmm-standard clr-standard mst t_learner s_learner x_learner dr_learner causal_forest \
+        --disallowed_ball_radius 0.2 \
         --save_file "$OUTFILE" \
-        --sequence_seed 92
+        --sequence_seed 4079
 
     echo "✅ Finished d=${D}. Saved to $OUTFILE"
     echo "----------------------------------------"

@@ -4,6 +4,29 @@ from ground_truth import PopulationSimulator, SegmentEstimate
 from sklearn.neural_network import MLPRegressor
 from sklearn.linear_model import LogisticRegression
 
+def _build_mu_matrix(mu_models, X_impl):
+    """
+    Build matrix of predicted outcomes for each action.
+    
+    Returns:
+    mu_mat : array, shape (n, n_actions)
+        mu_mat[:, i] contains predictions for action i (using enumeration index, not action value)
+    """
+    n = X_impl.shape[0]
+    n_actions = len(mu_models)
+    mu_mat = np.zeros((n, n_actions), dtype=float)
+    
+    # Sort actions to ensure consistent column ordering
+    sorted_actions = sorted(mu_models.keys())
+    for i, action in enumerate(sorted_actions):
+        model = mu_models[action]
+        pred = model.predict(X_impl)
+        mu_mat[:, i] = pred
+
+    return mu_mat
+
+
+
 def T_learner(implement_customers, x_mat, D_vec, y_vec):
     """
     T-Learner implementation using neural networks.
@@ -31,6 +54,11 @@ def T_learner(implement_customers, x_mat, D_vec, y_vec):
     import numpy as np
     from sklearn.neural_network import MLPRegressor
     
+     
+    # x_mat = x_mat[::2]
+    # D_vec = D_vec[::2]
+    # y_vec = y_vec[::2]
+    
     # Identify all unique actions in the data
     unique_actions = np.unique(D_vec)
     n_actions = len(unique_actions)
@@ -49,11 +77,11 @@ def T_learner(implement_customers, x_mat, D_vec, y_vec):
         
         # Train model for this action
         model_a = MLPRegressor(
-            hidden_layer_sizes=(32, ),
-            activation='relu',
+            hidden_layer_sizes=(16,8),
+            activation='logistic',
              
             max_iter=2000,
-            early_stopping=True,
+              
         )
         model_a.fit(X_a, Y_a)
         mu_pilot_models[int(action)] = model_a
@@ -69,28 +97,6 @@ def T_learner(implement_customers, x_mat, D_vec, y_vec):
     
     return seg_labels_impl, action_identity
     
-
-def _build_mu_matrix(mu_models, X_impl):
-    """
-    Build matrix of predicted outcomes for each action.
-    
-    Returns:
-    mu_mat : array, shape (n, n_actions)
-        mu_mat[:, i] contains predictions for action i (using enumeration index, not action value)
-    """
-    n = X_impl.shape[0]
-    n_actions = len(mu_models)
-    mu_mat = np.zeros((n, n_actions), dtype=float)
-    
-    # Sort actions to ensure consistent column ordering
-    sorted_actions = sorted(mu_models.keys())
-    for i, action in enumerate(sorted_actions):
-        model = mu_models[action]
-        pred = model.predict(X_impl)
-        mu_mat[:, i] = pred
-
-    return mu_mat
-
 
 def X_learner(implement_customers, x_mat, D_vec, y_vec):
     """
@@ -132,6 +138,7 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
     """
     import numpy as np
     from sklearn.neural_network import MLPRegressor
+
     
     # Identify all unique actions
     unique_actions = np.unique(D_vec)
@@ -149,10 +156,10 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
     # ========== Stage 1: Fit outcome model for baseline ==========
     
     model_mu_baseline = MLPRegressor(
-        hidden_layer_sizes=(32,),
+        hidden_layer_sizes=(16,8),
         activation='relu',
         max_iter=2000,
-        early_stopping=True,
+          
     )
     model_mu_baseline.fit(X_baseline, Y_baseline)
     
@@ -177,11 +184,10 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
         # ========== Stage 1: Fit outcome model for this action ==========
         
         model_mu_action = MLPRegressor(
-            hidden_layer_sizes=(32,),
+            hidden_layer_sizes=(16,8),
             activation='relu',
-             
             max_iter=2000,
-            early_stopping=True,
+              
         )
         model_mu_action.fit(X_action, Y_action)
         
@@ -201,22 +207,22 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
         
         # Model trained on action a data
         model_tau_from_action = MLPRegressor(
-            hidden_layer_sizes=(32,),
-            activation='relu',
+            hidden_layer_sizes=(16,8),
+            activation='logistic',
              
             max_iter=2000,
-            early_stopping=True,
+              
         )
         model_tau_from_action.fit(X_action, tau_tilde_action)
         tau_models_from_action[action] = model_tau_from_action
         
         # Model trained on baseline data
         model_tau_from_baseline = MLPRegressor(
-            hidden_layer_sizes=(32,),
-            activation='relu',
+            hidden_layer_sizes=(16,8),
+            activation='logistic',
              
             max_iter=2000,
-            early_stopping=True,
+              
         )
         model_tau_from_baseline.fit(X_baseline, tau_tilde_baseline_to_action)
         tau_models_from_baseline[action] = model_tau_from_baseline
@@ -291,6 +297,7 @@ def S_learner(implement_customers, x_mat, D_vec, y_vec):
     import numpy as np
     from sklearn.neural_network import MLPRegressor
     from sklearn.preprocessing import OneHotEncoder
+     
     
     # Identify all unique actions in the data
     unique_actions = np.unique(D_vec)
@@ -312,11 +319,11 @@ def S_learner(implement_customers, x_mat, D_vec, y_vec):
     
     # Fit a single model on combined data
     model = MLPRegressor(
-        hidden_layer_sizes=(32,),
-        activation='relu',
+        hidden_layer_sizes=(16,8),
+        activation='logistic',
          
         max_iter=2000,
-        early_stopping=True,
+          
     )
     
     model.fit(X_D, y_vec)
@@ -418,10 +425,10 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
                 continue
             
             model_a = MLPRegressor(
-                hidden_layer_sizes=(32,),
-                activation='relu',
+                hidden_layer_sizes=(16,8),
+                activation='logistic',
                 max_iter=2000,
-                early_stopping=True,
+                  
                 random_state=42
             )
             model_a.fit(X_a, Y_a)
@@ -441,10 +448,10 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
         
         # Step 3: Regress pseudo-outcome on X to get CATE estimate
         cate_model = MLPRegressor(
-            hidden_layer_sizes=(32,),
-            activation='relu',
+            hidden_layer_sizes=(16,8),
+            activation='logistic',
             max_iter=2000,
-            early_stopping=True,
+              
             random_state=42
         )
         cate_model.fit(x_mat, pseudo_outcome)
@@ -476,10 +483,10 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
                 continue
             
             model_a = MLPRegressor(
-                hidden_layer_sizes=(32,),
-                activation='relu',
+                hidden_layer_sizes=(16,8),
+                activation='logistic',
                 max_iter=2000,
-                early_stopping=True,
+                  
                 random_state=42
             )
             model_a.fit(X_a, Y_a)
@@ -524,10 +531,10 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
             
             # Step 3: Regress pseudo-outcome on X
             cate_model_a = MLPRegressor(
-                hidden_layer_sizes=(32,),
-                activation='relu',
+                hidden_layer_sizes=(16,8),
+                activation='logistic',
                 max_iter=2000,
-                early_stopping=True,
+                  
                 random_state=42
             )
             cate_model_a.fit(X_binary, pseudo_outcome_a)

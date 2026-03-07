@@ -30,9 +30,6 @@ def build_design_matrix(x_array, D_array, include_interactions):
         return np.hstack([intercept, x_array, D_col])
 
 
-
-
-
 def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_labels, algo):
     """
     Assign customers to estimated segments based on segment labels.
@@ -50,43 +47,42 @@ def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_label
         assert cust.est_segment[algo].segment_id == m, f"Segment ID mismatch for customer {cust.customer_id}: expected {m}, got {cust.est_segment[algo].segment_id}"
         
 
-def estimate_segment_parameters(X, D, Y, include_interactions, action_num=None):
+def estimate_segment_parameters(X, D, Y, include_interactions, action_num):
     """
     Estimate treatment effect and recommend action.
-    
+
     STRICT REQUIREMENT: All actions in 0..action_num-1 must have samples in the data.
-    
+
     For binary treatment (2 actions):
         - est_tau = mean(Y|D=1) - mean(Y|D=0)
         - est_action = 1 if est_tau >= 0 else 0
-    
+
     For multi-arm treatment (>2 actions):
         - For each action a, compute mean_a = mean(Y|D=a)
         - est_action = argmax_a mean_a
         - est_tau = mean_{est_action} - mean_0 (effect relative to action 0)
-    
+
     Parameters:
         X: (N, d) array of covariates (not used, kept for API compatibility)
         D: (N,) array of action indicators
         Y: (N,) array of outcomes
         include_interactions: not used, kept for API compatibility
-        action_num: int, total number of possible actions (strict check: all must be present)
-    
+        action_num: int, total number of possible actions (required; all must be present)
+
     Returns:
         est_tau: float, estimated treatment effect
-        est_action: int, recommended action
+        est_action: int, recommended action (or 404 if any action is missing)
     """
     Y = np.ravel(Y)
-    D = np.ravel(D)
-    
-    unique_actions_in_data = np.unique(D)
-    
+    D = np.ravel(D).astype(int)   # ensure integer dtype for reliable membership tests
+
+    unique_actions_in_data = set(D.tolist())
+
     # Strict check: all actions 0..action_num-1 must be present
-    if action_num is not None:
-        for a in range(action_num):
-            if a not in unique_actions_in_data:
-                print(f"Warning: Action {a} missing in segment data.")
-                return 404, 404
+    for a in range(action_num):
+        if a not in unique_actions_in_data:
+            print(f"Warning: Action {a} missing in segment data.")
+            return 404, 404
     
     
     # Compute mean outcome for each action
@@ -197,7 +193,7 @@ def evaluate_on_validation(pop: PopulationSimulator, algo, Gamma_val, customers=
         # BUG FIX: Only handle the case when action is undecided (404)
         if assigned_action == 404:
             if algo in ["mst", "policy_tree", "gmm-standard", "gmm-da", "kmeans-standard", "kmeans-da"]:
-                assigned_action = 0
+                assigned_action = np.random.randint(0, pop.action_num)
                 cust.est_segment[algo].est_action = assigned_action
             else:
                 assigned_action = cust.true_segment.action
@@ -208,7 +204,7 @@ def evaluate_on_validation(pop: PopulationSimulator, algo, Gamma_val, customers=
         else:
             V += Gamma_val[i, assigned_action]
 
-    return V / len(customers)
+    return V 
 
 def assign_new_customers_to_segments(pop: PopulationSimulator, customers, model, algo):
     """
@@ -249,11 +245,13 @@ def pick_M_for_algo(algo, df_results_M):
     if is_maximize:
         best_score = df_results_M[val_col].max()
         candidates = df_results_M[df_results_M[val_col] == best_score].copy()
-
-        if algo == "dast":
-            picked_M = int(candidates["M"].max())  
-        else:
-            picked_M = int(candidates["M"].min())
+        
+        picked_M = int(candidates["M"].min())
+        
+        # if algo == "dast":
+        #     picked_M = int(candidates["M"].max())  
+        # else:
+        #     picked_M = int(candidates["M"].min())
 
     elif is_minimize:
         best_score = df_results_M[val_col].min()
@@ -276,11 +274,14 @@ def parse_args():
 
     parser.add_argument("--outcome_type", type=str, choices=["continuous", "discrete"], required=True,
                         help="Outcome type: 'continuous' (linear regression) or 'discrete' (Bernoulli)")
-    parser.add_argument("--alpha_range", type=float, nargs=2, help="Range for alpha parameter (continuous only)")
-    parser.add_argument("--beta_range", type=float, nargs=2, help="Range for beta parameter (continuous only)")
-    parser.add_argument("--tau_range", type=float, nargs=2, help="Range for tau parameter (continuous only)")
+    parser.add_argument("--alpha_range", type=float, nargs=2, help="Range for alpha intercept (continuous only)")
+    parser.add_argument("--beta_range",  type=float, nargs=2, help="Range for covariate effect beta (both outcome types)")
+    parser.add_argument("--tau_range",   type=float, nargs=2, help="Range for treatment effect tau (both outcome types)")
+    parser.add_argument("--target_p_range", type=float, nargs=2,
+                        help="[discrete only] Target P(Y=1 | x=x_mean, D=0) range. "
+                             "Alpha is back-computed so the baseline probability at the segment "
+                             "centre exactly equals target_p. Replaces --alpha_range for discrete.")
     parser.add_argument("--delta_range", type=float, nargs=2, help="Range for delta (interaction) parameter (continuous only)")
-    parser.add_argument("--p_range", type=float, nargs=2, help="Range for Bernoulli probability p (discrete only)")
     parser.add_argument("--x_mean_range", type=float, nargs=2, help="Range for x_mean parameter")
 
     

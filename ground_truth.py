@@ -22,71 +22,81 @@ ALGORITHMS = ["kmeans-standard", "kmeans-da",
               "dr_learner",
               "causal_forest"]
 
+def _sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -6, 6)))
+
+
 class SegmentTrue:
+    """
+    True segment parameters.
+
+    Both outcome types share the same parameter structure:
+        alpha  : scalar intercept
+        beta   : (d,)            covariate main effects
+        tau    : (action_num,)   treatment effects; tau[0] = 0 by convention
+        delta  : (action_num, d) or None — treatment-covariate interactions (optional)
+
+    Outcome generation:
+        continuous : y = alpha + beta@x + tau[D] + (delta[D]@x if delta) + N(0, noise_std)
+        discrete   : eta = alpha + beta@x + tau[D] + (delta[D]@x if delta)
+                     p   = sigmoid(eta)
+                     y   ~ Bernoulli(p)
+
+    Optimal action (x-independent for both types because alpha and beta@x cancel
+    across actions when comparing actions):
+        action = argmax_a tau[a]
+    """
+
     def __init__(self, segment_id=None, x_mean=None, outcome_type=None,
-                 # continuous outcome params
-                 alpha=None, beta=None, tau=None, delta=None,
-                 # discrete outcome params
-                 p=None):
+                 alpha=None, beta=None, tau=None, delta=None):
         if outcome_type is None:
             raise ValueError("outcome_type must be specified: 'continuous' or 'discrete'")
-        self.outcome_type = outcome_type
-        self.x_mean = x_mean
-        self.segment_id = segment_id
-
-        if outcome_type == 'discrete':
-            assert p is not None, "p must be provided for discrete outcome_type"
-            self.p = p          # shape (action_num,): P(Y=1 | D=a, Z=k)
-            self.tau = p - p[0] # probability lift vs baseline; tau[0]=0 by definition
-            self.action = int(np.argmax(self.p))
-            # continuous params not used
-            self.alpha = None
-            self.beta = None
-            self.delta = None
-
-        elif outcome_type == 'continuous':
-            assert alpha is not None, "alpha must be provided for continuous outcome_type"
-            assert beta is not None, "beta must be provided for continuous outcome_type"
-            assert tau is not None, "tau must be provided for continuous outcome_type"
-            self.alpha = alpha
-            self.beta = beta    # shape (d,)
-            self.tau = tau      # shape (action_num,): tau[0]=0, tau[a] = effect of action a
-            self.delta = delta  # shape (action_num, d) or None
-            self.action = int(np.argmax(self.tau))
-            # discrete params not used
-            self.p = None
-
-        else:
+        if outcome_type not in ('continuous', 'discrete'):
             raise ValueError(f"Unknown outcome_type: '{outcome_type}'. Must be 'continuous' or 'discrete'.")
+
+        assert alpha is not None, "alpha must be provided"
+        assert beta  is not None, "beta must be provided"
+        assert tau   is not None, "tau must be provided"
+
+        self.outcome_type = outcome_type
+        self.segment_id   = segment_id
+        self.x_mean       = x_mean
+
+        self.alpha  = alpha
+        self.beta   = beta   # shape (d,)
+        self.tau    = tau    # shape (action_num,); tau[0] = 0
+        self.delta  = delta  # shape (action_num, d) or None
+        self.action = int(np.argmax(self.tau))
+
+    def _linear_predictor(self, x, D_i, signal_d):
+        """Shared linear predictor η = alpha + beta@x + tau[D] + (delta[D]@x)."""
+        eta = self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau[int(D_i)]
+        if self.delta is not None:
+            eta += self.delta[int(D_i), :signal_d] @ x[:signal_d]
+        return eta
 
     def generate_outcome(self, x, D_i, noise_std, signal_d):
         """Stochastic outcome sample — use for data generation only."""
+        eta = self._linear_predictor(x, D_i, signal_d)
         if self.outcome_type == 'discrete':
-            # Y ~ Bernoulli(p[D_i]); x and noise_std are not used
-            return int(np.random.binomial(1, self.p[int(D_i)]))
-        elif self.outcome_type == 'continuous':
-            noise = np.random.normal(0, noise_std)
-            # y = alpha + beta @ x + tau[D_i] + delta[D_i] @ x + noise
-            base = self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau[int(D_i)]
-            if self.delta is not None:
-                interaction = self.delta[int(D_i), :signal_d] @ x[:signal_d]
-                return base + interaction + noise
-            return base + noise
+            # Y ~ Bernoulli(sigmoid(eta))
+            p = _sigmoid(eta)
+            return int(np.random.binomial(1, p))
+        else:
+            # Y = eta + N(0, noise_std)
+            return eta + np.random.normal(0, noise_std)
 
     def expected_outcome(self, x, D_i, signal_d):
         """Deterministic expected outcome — use for profit evaluation and oracle metrics.
 
-        Continuous: E[Y | x, D_i] = alpha + beta @ x + tau[D_i] + delta[D_i] @ x  (no noise)
-        Discrete:   E[Y | D_i]    = p[D_i]  (expected probability of Y=1; x not used)
+        Continuous : E[Y | x, D] = eta          (no noise)
+        Discrete   : E[Y | x, D] = sigmoid(eta)  (expected Bernoulli probability)
         """
+        eta = self._linear_predictor(x, D_i, signal_d)
         if self.outcome_type == 'discrete':
-            return float(self.p[int(D_i)])
-        elif self.outcome_type == 'continuous':
-            base = self.alpha + self.beta[:signal_d] @ x[:signal_d] + self.tau[int(D_i)]
-            if self.delta is not None:
-                interaction = self.delta[int(D_i), :signal_d] @ x[:signal_d]
-                return base + interaction
-            return base
+            return float(_sigmoid(eta))
+        else:
+            return float(eta)
         
 
         
@@ -121,15 +131,15 @@ class Customer_implement:
 
         Uses expected_outcome (not generate_outcome) so the result is always deterministic:
           - continuous: E[Y] = alpha + beta @ x + tau[a] + delta[a] @ x  (no noise)
-          - discrete:   E[Y] = p[a]  (expected success probability)
+          - discrete:   E[Y] = sigmoid(alpha + beta @ x + tau[a] + delta[a] @ x)
         """
-        if implement_action is None:
+        if implement_action is not None:
+            self.implement_action = implement_action
+        else:
             if self.est_segment[algo].est_action != 404:
                 self.implement_action = self.est_segment[algo].est_action
             else:
-                self.implement_action = self.true_segment.action  # 404 fallback
-        else:
-            self.implement_action = implement_action
+                self.implement_action = 1 # 404 fallback
 
         self.y = self.true_segment.expected_outcome(self.x, self.implement_action, self.signal_d)
         return self.y
@@ -174,10 +184,11 @@ class PopulationSimulator:
         self.signal_covariate_noise = X_noise_std_scale * avg_distance
         print(f"Computed X_covariate_noise: {self.signal_covariate_noise:.4f} (scale={X_noise_std_scale}, avg_distance={avg_distance:.4f})")
         
-        self._adjust_adjacent_cluster_tau()
+        
         
         # noise_std: only meaningful for continuous; discrete uses Bernoulli randomness
         if outcome_type == 'continuous':
+            self._adjust_adjacent_cluster_tau()
             if Y_noise_std_scale is None:
                 raise ValueError("Y_noise_std_scale is required for continuous outcome_type.")
             tau_values = np.array([seg.tau[1:] for seg in self.true_segments]).flatten()
@@ -189,9 +200,12 @@ class PopulationSimulator:
             self.noise_std = 0.0
             if Y_noise_std_scale is not None:
                 print("Note: Y_noise_std_scale is ignored for discrete outcome_type.")
-        
+
         self.pilot_customers = self._generate_pilot_customers()
         self.implement_customers = self._generate_implement_customers()
+
+        if outcome_type == 'discrete':
+            self._print_segment_sigmoids()
         
         self.est_segments_list = {algo: [] for algo in ALGORITHMS}
         
@@ -207,25 +221,38 @@ class PopulationSimulator:
         pr = self.param_range  # alias for convenience
         true_segments = []
         
-        def _make_segment_params(k):
-            """Sample outcome parameters for one segment based on outcome_type."""
-            if self.outcome_type == 'discrete':
-                # p[a] ~ Uniform(p_range) for each action
-                p_vec = np.array([np.random.uniform(*pr["p"]) for _ in range(self.action_num)])
-                return dict(alpha=None, beta=None, tau=None, delta=None, p=p_vec)
-            else:
-                alpha = np.random.uniform(*pr["alpha"])
-                beta = np.random.uniform(*pr["beta"], size=self.d)
-                tau_vec = np.zeros(self.action_num)
+        def _make_segment_params(k, x_mean=None):
+            """Sample outcome parameters for one segment.
+
+            Continuous : alpha ~ Uniform(alpha_range); beta, tau sampled directly.
+            Discrete   : target_p ~ Uniform(target_p_range) sets P(Y=1|x=x_mean, D=0).
+                         alpha is back-computed so that sigmoid(alpha + beta@x_mean) = target_p,
+                         i.e. alpha = logit(target_p) - beta@x_mean[:signal_d].
+                         This decouples sparsity control (target_p) from x-heterogeneity (beta).
+            """
+            beta = np.random.uniform(*pr["beta"], size=self.d)
+            tau_vec = np.zeros(self.action_num)
+            for a in range(1, self.action_num):
+                tau_vec[a] = np.random.uniform(*pr["tau"])
+            if pr.get("delta") is not None:
+                delta_mat = np.zeros((self.action_num, self.d))
                 for a in range(1, self.action_num):
-                    tau_vec[a] = np.random.uniform(*pr["tau"])
-                if pr.get("delta") is not None:
-                    delta_mat = np.zeros((self.action_num, self.d))
-                    for a in range(1, self.action_num):
-                        delta_mat[a] = np.random.uniform(*pr["delta"], size=self.d)
-                else:
-                    delta_mat = None
-                return dict(alpha=alpha, beta=beta, tau=tau_vec, delta=delta_mat, p=None)
+                    delta_mat[a] = np.random.uniform(*pr["delta"], size=self.d)
+            else:
+                delta_mat = None
+
+            if pr.get("target_p") is not None:
+                # Discrete: back-compute alpha from target baseline probability
+                target_p = np.random.uniform(*pr["target_p"])
+                target_p = np.clip(target_p, 1e-6, 1 - 1e-6)
+                logit_target = np.log(target_p / (1.0 - target_p))
+                beta_dot_xmean = beta[:self.signal_d] @ x_mean[:self.signal_d] if x_mean is not None else 0.0
+                alpha = logit_target - beta_dot_xmean
+            else:
+                # Continuous: sample alpha directly
+                alpha = np.random.uniform(*pr["alpha"])
+
+            return dict(alpha=alpha, beta=beta, tau=tau_vec, delta=delta_mat)
 
         # If generating mean vectors, use minimum distance constraint
         if X_mean_vectors is None:
@@ -233,47 +260,47 @@ class PopulationSimulator:
             space_range = pr["x_mean"][1] - pr["x_mean"][0]
             min_distance = (space_range / (self.K ** (1.0 / self.d))) * self.disallowed_ball_radius
             print(f"Generating mean vectors with minimum distance: {min_distance:.2f}")
-            
+
             generated_means = []
             for k in range(self.K):
-                params = _make_segment_params(k)
-                
-                # Generate x_mean with minimum distance constraint
+                # Sample x_mean FIRST so discrete can back-compute alpha from it
                 max_attempts = 100
+                x_mean = None
                 for attempt in range(max_attempts):
                     x_mean_candidate = np.random.uniform(*pr["x_mean"], size=self.d)
-                    
+
                     if len(generated_means) == 0:
                         x_mean = x_mean_candidate
                         break
-                    
-                    distances = [np.linalg.norm(x_mean_candidate - existing) 
-                                for existing in generated_means]
+
+                    distances = [np.linalg.norm(x_mean_candidate - existing)
+                                 for existing in generated_means]
                     min_dist_to_existing = min(distances)
-                    
+
                     if min_dist_to_existing >= min_distance:
                         x_mean = x_mean_candidate
                         break
-                    
+
                     if attempt == max_attempts - 1:
                         print(f"⚠️  Warning: Could not find mean vector for cluster {k} satisfying min distance.")
                         print(f"   Using best candidate with distance {min_dist_to_existing:.2f}")
                         x_mean = x_mean_candidate
-                
+
+                params = _make_segment_params(k, x_mean=x_mean)
                 generated_means.append(x_mean)
                 true_segments.append(SegmentTrue(
                     segment_id=k, x_mean=x_mean, outcome_type=self.outcome_type,
-                    alpha=params["alpha"], beta=params["beta"], tau=params["tau"],
-                    delta=params["delta"], p=params["p"]))
+                    alpha=params["alpha"], beta=params["beta"],
+                    tau=params["tau"],    delta=params["delta"]))
         else:
             # Use provided mean vectors
             for k in range(self.K):
-                params = _make_segment_params(k)
                 x_mean = X_mean_vectors[k]
+                params = _make_segment_params(k, x_mean=x_mean)
                 true_segments.append(SegmentTrue(
                     segment_id=k, x_mean=x_mean, outcome_type=self.outcome_type,
-                    alpha=params["alpha"], beta=params["beta"], tau=params["tau"],
-                    delta=params["delta"], p=params["p"]))
+                    alpha=params["alpha"], beta=params["beta"],
+                    tau=params["tau"],    delta=params["delta"]))
         
         return true_segments
     
@@ -321,19 +348,11 @@ class PopulationSimulator:
             # If same best action, fix seg2 to have a different best action
             if action1_before == action2_before:
                 seg2 = self.true_segments[idx2]
-                if self.outcome_type == 'discrete':
-                    # Re-sample p for seg2 until best action differs
-                    pr = self.param_range
-                    for _ in range(1000):
-                        p_new = np.array([np.random.uniform(*pr["p"]) for _ in range(self.action_num)])
-                        if int(np.argmax(p_new)) != action1_before:
-                            seg2.p = p_new
-                            seg2.tau = p_new - p_new[0]
-                            seg2.action = int(np.argmax(p_new))
-                            break
-                else:
-                    seg2.tau[1:] = -seg2.tau[1:]
-                    seg2.action = int(np.argmax(seg2.tau))
+                # Flip non-baseline tau signs so argmax changes
+                # Works for both continuous and discrete (logistic) because
+                # action = argmax(tau) in both cases.
+                seg2.tau[1:] = -seg2.tau[1:]
+                seg2.action = int(np.argmax(seg2.tau))
 
                 action2_after = self.true_segments[idx2].action
                 print(f"⚠️  Adjacent clusters (segments {idx1} and {idx2}) had same best action ({action1_before}).")
@@ -343,6 +362,54 @@ class PopulationSimulator:
                 print(f"✓ Adjacent clusters (segments {idx1} and {idx2}) already have different best actions.")
                 print(f"   Distance: {dist:.2f}, sigma={sigma:.2f}")
                 print(f"   Seg{idx1}: action={action1_before}, Seg{idx2}: action={action2_before}")
+
+    def _print_segment_sigmoids(self):
+        """Print per-segment discrete outcome probabilities (discrete only).
+
+        Two rows per segment:
+          p(x_mean) : sigmoid(alpha + beta@x_mean + tau[D])  — the exact target_p guarantee point
+          realized  : actual y=1 rate among pilot customers  — reflects the full x distribution
+        """
+        from collections import defaultdict
+
+        # Collect pilot y=1 counts per (segment, action)
+        seg_action_y = defaultdict(list)
+        for c in self.pilot_customers:
+            seg_action_y[(c.true_segment.segment_id, c.D_i)].append(c.y)
+
+        action_labels = [f"D={a}" for a in range(self.action_num)]
+        col_w = 10
+        sep = "  "
+        header_cols = sep.join(f"{lbl:>{col_w}}" for lbl in action_labels)
+        header = f"{'Seg':>4}  {'best':>4}  {'':12}{header_cols}"
+        divider = "-" * (4 + 2 + 4 + 2 + 12 + (col_w + 2) * self.action_num)
+
+        print(f"\n{'─'*60}")
+        print("  Discrete segment probabilities  P(Y=1 | D=a)")
+        print(f"{'─'*60}")
+        print(header)
+        print(divider)
+
+        for seg in self.true_segments:
+            k = seg.segment_id
+            # Row 1: p at x_mean (exact target_p guarantee)
+            xmean_probs = [seg.expected_outcome(seg.x_mean, a, self.signal_d)
+                           for a in range(self.action_num)]
+            xmean_str = sep.join(f"{p:{col_w}.4f}" for p in xmean_probs)
+            print(f"{k:>4}  {seg.action:>4}  {'p(x=x_mean)':12}{xmean_str}")
+
+            # Row 2: realized y=1 rate among pilot customers
+            realized = []
+            for a in range(self.action_num):
+                ys = seg_action_y.get((k, a), [])
+                realized.append(np.mean(ys) if ys else float('nan'))
+            real_str = sep.join(
+                f"{p:{col_w}.4f}" if not np.isnan(p) else f"{'N/A':>{col_w}}"
+                for p in realized
+            )
+            print(f"{'':>4}  {'':>4}  {'realized':12}{real_str}")
+
+        print(f"{'─'*60}\n")
 
     def _generate_pilot_customers(self):
         pilot_customers = []
@@ -603,7 +670,7 @@ class PopulationSimulator:
         return Gamma_train, Gamma_val
 
 
-    def split_pilot_customers_into_train_and_validate(self, train_frac=0.8):
+    def split_pilot_customers_into_train_and_validate(self, train_frac):
         indices = np.arange(self.N_total_pilot_customers)
 
         split = int(self.N_total_pilot_customers * train_frac)

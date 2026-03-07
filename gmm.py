@@ -5,7 +5,7 @@ import numpy as np
 
 
 
-def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D_vec, y_vec,algo, include_interactions, random_state=None):
+def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D_vec, y_vec,algo, include_interactions, random_state=None, is_discrete=False):
     """
     Perform GMM-based segmentation and OLS-based estimation per segment.
 
@@ -14,7 +14,7 @@ def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         n_segments: number of segments to estimate
         random_state: optional random seed for reproducibility
     """
-    
+
     gmm_model = GaussianMixture(n_components=n_segments, random_state=random_state)
     gmm_labels = gmm_model.fit_predict(x_mat)
     bic = gmm_model.bic(x_mat)
@@ -34,6 +34,8 @@ def GMM_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         y_m = y_vec[idx_m]
         
         est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m, include_interactions, pop.action_num)
+        # if is_discrete and est_action == (pop.action_num -1):
+        #     est_action = 0
         est_seg = SegmentEstimate(est_tau, est_action, segment_id=m)
         pop.est_segments_list[f"{algo}"].append(est_seg)
 
