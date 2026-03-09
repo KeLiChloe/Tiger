@@ -615,9 +615,9 @@ class PopulationSimulator:
                 if len(X_a) == 0:
                     raise ValueError(f"No training samples for action {a}. Cannot fit outcome model.")
                 if is_discrete:
-                    m = LGBMClassifier(n_estimators=100, verbose=-1)
+                    m = LGBMClassifier(n_estimators=500, verbose=-1)
                 else:
-                    m = LGBMRegressor(n_estimators=100, verbose=-1)
+                    m = LGBMRegressor(n_estimators=500, verbose=-1)
                 m.fit(X_a, Y_a)
                 models[a] = m
 
@@ -633,9 +633,9 @@ class PopulationSimulator:
                 if len(X_a) == 0:
                     raise ValueError(f"No training samples for action {a}. Cannot fit outcome model.")
                 if is_discrete:
-                    m = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42)
+                    m = RandomForestClassifier(n_estimators=500, n_jobs=-1, random_state=42)
                 else:
-                    m = RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=42)
+                    m = RandomForestRegressor(n_estimators=500, n_jobs=-1, random_state=42)
                 m.fit(X_a, Y_a)
                 models[a] = m
 
@@ -654,9 +654,9 @@ class PopulationSimulator:
                 if len(X_a) == 0:
                     raise ValueError(f"No training samples for action {a}. Cannot fit outcome model.")
                 if is_discrete:
-                    m = XGBClassifier(n_estimators=100, verbosity=0, random_state=42)
+                    m = XGBClassifier(n_estimators=500, verbosity=0, random_state=42)
                 else:
-                    m = XGBRegressor(n_estimators=100, verbosity=0, random_state=42)
+                    m = XGBRegressor(n_estimators=500, verbosity=0, random_state=42)
                 m.fit(X_a, Y_a)
                 models[a] = m
 
