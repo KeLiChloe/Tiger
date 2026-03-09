@@ -77,9 +77,8 @@ def T_learner(implement_customers, x_mat, D_vec, y_vec):
         
         # Train model for this action
         model_a = MLPRegressor(
-            hidden_layer_sizes=(16,8),
-            activation='logistic',
-             
+            hidden_layer_sizes=(64,8),
+            activation='relu',
             max_iter=2000,
               
         )
@@ -156,7 +155,7 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
     # ========== Stage 1: Fit outcome model for baseline ==========
     
     model_mu_baseline = MLPRegressor(
-        hidden_layer_sizes=(16,8),
+        hidden_layer_sizes=(64,8),
         activation='relu',
         max_iter=2000,
           
@@ -184,7 +183,7 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
         # ========== Stage 1: Fit outcome model for this action ==========
         
         model_mu_action = MLPRegressor(
-            hidden_layer_sizes=(16,8),
+            hidden_layer_sizes=(64,8),
             activation='relu',
             max_iter=2000,
               
@@ -207,8 +206,8 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
         
         # Model trained on action a data
         model_tau_from_action = MLPRegressor(
-            hidden_layer_sizes=(16,8),
-            activation='logistic',
+            hidden_layer_sizes=(64,8),
+             activation='relu',
              
             max_iter=2000,
               
@@ -218,8 +217,8 @@ def X_learner(implement_customers, x_mat, D_vec, y_vec):
         
         # Model trained on baseline data
         model_tau_from_baseline = MLPRegressor(
-            hidden_layer_sizes=(16,8),
-            activation='logistic',
+            hidden_layer_sizes=(64,8),
+             activation='relu',
              
             max_iter=2000,
               
@@ -319,8 +318,8 @@ def S_learner(implement_customers, x_mat, D_vec, y_vec):
     
     # Fit a single model on combined data
     model = MLPRegressor(
-        hidden_layer_sizes=(16,8),
-        activation='logistic',
+        hidden_layer_sizes=(64,8),
+        activation='relu',
          
         max_iter=2000,
           
@@ -425,8 +424,8 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
                 continue
             
             model_a = MLPRegressor(
-                hidden_layer_sizes=(16,8),
-                activation='logistic',
+                hidden_layer_sizes=(64,8),
+                 activation='relu',
                 max_iter=2000,
                   
                 random_state=42
@@ -448,8 +447,8 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
         
         # Step 3: Regress pseudo-outcome on X to get CATE estimate
         cate_model = MLPRegressor(
-            hidden_layer_sizes=(16,8),
-            activation='logistic',
+            hidden_layer_sizes=(64,8),
+             activation='relu',
             max_iter=2000,
               
             random_state=42
@@ -483,8 +482,8 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
                 continue
             
             model_a = MLPRegressor(
-                hidden_layer_sizes=(16,8),
-                activation='logistic',
+                hidden_layer_sizes=(64,8),
+                 activation='relu',
                 max_iter=2000,
                   
                 random_state=42
@@ -531,8 +530,8 @@ def DR_learner(implement_customers, x_mat, D_vec, y_vec):
             
             # Step 3: Regress pseudo-outcome on X
             cate_model_a = MLPRegressor(
-                hidden_layer_sizes=(16,8),
-                activation='logistic',
+                hidden_layer_sizes=(64,8),
+                 activation='relu',
                 max_iter=2000,
                   
                 random_state=42
