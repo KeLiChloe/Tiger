@@ -1,3 +1,4 @@
+import warnings
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression, LogisticRegression
@@ -609,20 +610,22 @@ class PopulationSimulator:
             except ImportError:
                 raise ImportError("lightgbm is not installed. Run: pip install lightgbm")
             models = {}
-            for a in range(n_actions):
-                X_a = X_train[D_train == a]
-                Y_a = Y_train[D_train == a]
-                if len(X_a) == 0:
-                    raise ValueError(f"No training samples for action {a}. Cannot fit outcome model.")
-                if is_discrete:
-                    m = LGBMClassifier(n_estimators=500, verbose=-1)
-                else:
-                    m = LGBMRegressor(n_estimators=500, verbose=-1)
-                m.fit(X_a, Y_a)
-                models[a] = m
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*valid feature names.*", category=UserWarning)
+                for a in range(n_actions):
+                    X_a = X_train[D_train == a]
+                    Y_a = Y_train[D_train == a]
+                    if len(X_a) == 0:
+                        raise ValueError(f"No training samples for action {a}. Cannot fit outcome model.")
+                    if is_discrete:
+                        m = LGBMClassifier(n_estimators=500, verbose=-1)
+                    else:
+                        m = LGBMRegressor(n_estimators=500, verbose=-1)
+                    m.fit(X_a, Y_a)
+                    models[a] = m
 
-            Gamma_train = _compute_gamma(X_train, D_train, Y_train, models)
-            Gamma_val = _compute_gamma(X_val, D_val, Y_val, models) if X_val is not None and len(X_val) > 0 else None
+                Gamma_train = _compute_gamma(X_train, D_train, Y_train, models)
+                Gamma_val = _compute_gamma(X_val, D_val, Y_val, models) if X_val is not None and len(X_val) > 0 else None
 
         elif method == "random_forest":
             from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
