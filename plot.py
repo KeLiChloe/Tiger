@@ -264,8 +264,8 @@ def plot_implementation_clustering(implement_customers, algo, title=None):
     assigned_treatments = np.array([cust.implement_action for cust in implement_customers])  # Treatment assigned by algo
     
     # Generate ground truth potential outcomes for BOTH treatments
-    Y_0 = np.array([cust.true_segment.generate_outcome(cust.x, 0, 0, cust.signal_d) for cust in implement_customers])
-    Y_1 = np.array([cust.true_segment.generate_outcome(cust.x, 1, 0, cust.signal_d) for cust in implement_customers])
+    Y_0 = np.array([cust.expected_outcome(0) for cust in implement_customers])
+    Y_1 = np.array([cust.expected_outcome(1) for cust in implement_customers])
     
     # Actual observed outcome (based on assigned treatment)
     Y_observed = np.array([cust.y for cust in implement_customers])

@@ -1,7 +1,7 @@
 from ground_truth import PopulationSimulator
 from plot import plot_ground_truth, plot_segmentation
 from gmm import GMM_segment_and_estimate
-from oracle import structure_oracle, policy_oracle
+from oracle import structure_oracle, policy_oracle, oracle_profit_on_customers
 import pandas as pd
 import numpy as np
 from policy_tree import policy_tree_segment_and_estimate, assign_new_customers_to_pruned_tree
@@ -51,27 +51,29 @@ def main(args, param_range):
     print(f"Using fixed sequence seed: {args.sequence_seed if args.sequence_seed is not None else sequence_seed}")
 
     exp_result_dict = {
-    "exp_params": {
-        "sequence_seed": args.sequence_seed if args.sequence_seed is not None else sequence_seed,
-        "action_num": getattr(args, 'action_num', 2),
-        "K": getattr(args, "K", None),
-        "d": getattr(args, "d", None),
-        "partial_x": getattr(args, 'partial_x', None),
-        "X_noise_std_scale": getattr(args, 'X_noise_std_scale', None),
-        "disturb_covariate_noise": getattr(args, 'disturb_covariate_noise', None),
-        "Y_noise_std_scale": getattr(args, 'Y_noise_std_scale', None),
-        "disallowed_ball_radius": getattr(args, 'disallowed_ball_radius', None),
-        "param_range": param_range,
-        "N_segment_size": getattr(args, 'N_segment_size', None),
-        "DR_generation_method": getattr(args, 'DR_generation_method', None),
-        "kmeans_coef": getattr(args, 'kmeans_coef', None),
-        "N_total_pilot_customers": N_total_pilot_customers,
-        "implementation_scale": getattr(args, 'implementation_scale', None),
-        "outcome_type": outcome_type,
-    },
-    
-    **{algo: [] for algo in args.algorithms},
+        "exp_params": {
+            "sequence_seed": args.sequence_seed if args.sequence_seed is not None else sequence_seed,
+            "action_num": getattr(args, 'action_num', 2),
+            "K": getattr(args, "K", None),
+            "d": getattr(args, "d", None),
+            "partial_x": getattr(args, 'partial_x', None),
+            "X_noise_std_scale": getattr(args, 'X_noise_std_scale', None),
+            "disturb_covariate_noise": getattr(args, 'disturb_covariate_noise', None),
+            "Y_noise_std_scale": getattr(args, 'Y_noise_std_scale', None),
+            "disallowed_ball_radius": getattr(args, 'disallowed_ball_radius', None),
+            "param_range": param_range,
+            "N_segment_size": getattr(args, 'N_segment_size', None),
+            "DR_generation_method": getattr(args, 'DR_generation_method', None),
+            "kmeans_coef": getattr(args, 'kmeans_coef', None),
+            "N_total_pilot_customers": N_total_pilot_customers,
+            "implementation_scale": getattr(args, 'implementation_scale', None),
+            "outcome_type": outcome_type,
+        },
+        
+        
         "seed": [],
+        "oracle_profits_impl": [],
+        **{algo: [] for algo in args.algorithms},
     }
 
 
@@ -105,7 +107,12 @@ def main(args, param_range):
             plot_ground_truth(df)
         
         algo_result_dict = {}
-        
+
+        # Oracle profit on implement set: algorithm-independent, compute once per sim
+        oracle_profit_impl = oracle_profit_on_customers(
+            pop.implement_customers, signal_d=pop.signal_d)
+        print(f"Oracle profit on implementation set: {oracle_profit_impl:.2f}")
+
         try:
             for algo in args.algorithms:
                 
@@ -236,11 +243,6 @@ def main(args, param_range):
 
                 picked_M = {**oracle_picked_M, **algo_picked_M}
                 
-                # for metric, picked_m_val in picked_M.items():
-                #     idx = df_results_M[df_results_M['M'] == picked_m_val].index[0]
-                #     print(f"  {metric}: \tM = {picked_m_val}, manager profit = {df_results_M.loc[idx, 'manager_profit']:.2f}")
-
-
                 is_meta_learner = algo in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"]
                 if is_meta_learner:
                     row_at_picked_M = None
@@ -333,9 +335,6 @@ def main(args, param_range):
                 algo_result_dict[algo]['implementation_profits'] = implementation_outcome
                 
                 
-                # oracle_profits_implementation = policy_oracle(pop.implement_customers, algo)
-                
-                
         except:
             import traceback
             traceback.print_exc()
@@ -343,16 +342,11 @@ def main(args, param_range):
         
         for algo in args.algorithms:
             exp_result_dict[algo].append(algo_result_dict[algo])
-        
-        exp_result_dict['seed'].append(seed)
-        
-        # print(f"Oracle profits: {oracle_profits_implementation['oracle_profit']:.2f}")
 
-        # save the result after each simulation and print simulation number
-        # Use first algorithm in the list to track progress
-        first_algo = args.algorithms[0]
-        print(f"Completed {len(exp_result_dict[first_algo])} / {args.N_sims} simulations.")
-        
+        exp_result_dict['seed'].append(seed)
+        exp_result_dict['oracle_profits_impl'].append(oracle_profit_impl)
+
+
         if args.save_file is not None:
             with open(args.save_file, "wb") as f:
                 print(f"Saving results to {args.save_file}")

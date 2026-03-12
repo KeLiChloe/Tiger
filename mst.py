@@ -32,7 +32,7 @@ def compute_residual_value(X, Y, D, indices, include_interactions, action_num=No
         if len(np.unique(y_flat)) == 1:
             return 0.0
 
-        model = LogisticRegression(fit_intercept=False, solver='lbfgs', max_iter=200)
+        model = LogisticRegression(fit_intercept=False, solver='lbfgs', max_iter=2000)
         try:
             model.fit(X_design, y_flat)
             proba = model.predict_proba(X_design) + np.random.uniform(-1,1)

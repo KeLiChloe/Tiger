@@ -316,7 +316,7 @@ def parse_args():
     parser.add_argument("--sequence_seed", type=int, help="Random seed for simulation sequence")
 
     # 算法列表
-    parser.add_argument("--algorithms", type=str, nargs="+",
+    parser.add_argument("--algorithms", type=str, nargs="+", default=[],
                         help="List of algorithms to run")
 
     args = parser.parse_args()

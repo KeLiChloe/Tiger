@@ -67,7 +67,17 @@ class SegmentTrue:
         self.beta   = beta   # shape (d,)
         self.tau    = tau    # shape (action_num,); tau[0] = 0
         self.delta  = delta  # shape (action_num, d) or None
-        self.action = int(np.argmax(self.tau))
+        self.action = self._best_action_at(x_mean)
+
+    def _best_action_at(self, x):
+        """Return argmax_a E[Y | x, D=a], accounting for delta interactions.
+
+        Falls back to argmax(tau) when x or delta is not available.
+        """
+        if x is None or self.delta is None:
+            return int(np.argmax(self.tau))
+        scores = self.tau + self.delta @ np.asarray(x)
+        return int(np.argmax(scores))
 
     def _linear_predictor(self, x, D_i, signal_d):
         """Shared linear predictor η = alpha + beta@x + tau[D] + (delta[D]@x)."""
@@ -87,20 +97,8 @@ class SegmentTrue:
             # Y = eta + N(0, noise_std)
             return eta + np.random.normal(0, noise_std)
 
-    def expected_outcome(self, x, D_i, signal_d):
-        """Deterministic expected outcome — use for profit evaluation and oracle metrics.
 
-        Continuous : E[Y | x, D] = eta          (no noise)
-        Discrete   : E[Y | x, D] = sigmoid(eta)  (expected Bernoulli probability)
-        """
-        eta = self._linear_predictor(x, D_i, signal_d)
-        if self.outcome_type == 'discrete':
-            return float(_sigmoid(eta))
-        else:
-            return float(eta)
-        
 
-        
 class SegmentEstimate:
     def __init__(self, est_tau, est_action, segment_id=None):
         self.est_tau = est_tau
@@ -109,14 +107,21 @@ class SegmentEstimate:
 
 
 class Customer_pilot:
-    def __init__(self, x, D_i, y, true_segment: SegmentTrue,  customer_id=None):
+    def __init__(self, x, D_i, y, true_segment: SegmentTrue, signal_d, customer_id=None):
         self.x = x
         self.D_i = D_i
         self.true_segment = true_segment
         self.y = y
+        self.signal_d = signal_d
         self.est_segment = {algo: None for algo in ALGORITHMS}
-
         self.customer_id = customer_id
+
+    def expected_outcome(self, D_i):
+        """E[Y | self.x, D=D_i] under true segment parameters."""
+        seg = self.true_segment
+        eta = seg._linear_predictor(self.x, D_i, self.signal_d)
+        return float(_sigmoid(eta)) if seg.outcome_type == 'discrete' else float(eta)
+
 
 class Customer_implement:
     def __init__(self, x, true_segment: SegmentTrue, noise_std, signal_d):
@@ -124,25 +129,25 @@ class Customer_implement:
         self.true_segment = true_segment
         self.noise_std = noise_std
         self.signal_d = signal_d
-        
         self.est_segment = {algo: None for algo in ALGORITHMS}
-        
-    def evaluate_profits(self, algo, implement_action=None):
-        """Evaluate deterministic expected profit under the algorithm's recommended action.
 
-        Uses expected_outcome (not generate_outcome) so the result is always deterministic:
-          - continuous: E[Y] = alpha + beta @ x + tau[a] + delta[a] @ x  (no noise)
-          - discrete:   E[Y] = sigmoid(alpha + beta @ x + tau[a] + delta[a] @ x)
-        """
+    def expected_outcome(self, D_i):
+        """E[Y | self.x, D=D_i] under true segment parameters."""
+        seg = self.true_segment
+        eta = seg._linear_predictor(self.x, D_i, self.signal_d)
+        return float(_sigmoid(eta)) if seg.outcome_type == 'discrete' else float(eta)
+
+    def evaluate_profits(self, algo, implement_action=None):
+        """Evaluate deterministic expected profit under the algorithm's recommended action."""
         if implement_action is not None:
             self.implement_action = implement_action
         else:
             if self.est_segment[algo].est_action != 404:
                 self.implement_action = self.est_segment[algo].est_action
             else:
-                self.implement_action = 1 # 404 fallback
+                self.implement_action = 1  # 404 fallback
 
-        self.y = self.true_segment.expected_outcome(self.x, self.implement_action, self.signal_d)
+        self.y = self.expected_outcome(self.implement_action)
         return self.y
         
 # ----------------------------------------
@@ -353,7 +358,7 @@ class PopulationSimulator:
                 # Works for both continuous and discrete (logistic) because
                 # action = argmax(tau) in both cases.
                 seg2.tau[1:] = -seg2.tau[1:]
-                seg2.action = int(np.argmax(seg2.tau))
+                seg2.action = seg2._best_action_at(seg2.x_mean)
 
                 action2_after = self.true_segments[idx2].action
                 print(f"⚠️  Adjacent clusters (segments {idx1} and {idx2}) had same best action ({action1_before}).")
@@ -394,8 +399,12 @@ class PopulationSimulator:
         for seg in self.true_segments:
             k = seg.segment_id
             # Row 1: p at x_mean (exact target_p guarantee)
-            xmean_probs = [seg.expected_outcome(seg.x_mean, a, self.signal_d)
-                           for a in range(self.action_num)]
+            xmean_probs = [
+                float(_sigmoid(seg._linear_predictor(seg.x_mean, a, self.signal_d)))
+                if seg.outcome_type == 'discrete'
+                else float(seg._linear_predictor(seg.x_mean, a, self.signal_d))
+                for a in range(self.action_num)
+            ]
             xmean_str = sep.join(f"{p:{col_w}.4f}" for p in xmean_probs)
             print(f"{k:>4}  {seg.action:>4}  {'p(x=x_mean)':12}{xmean_str}")
 
@@ -449,7 +458,7 @@ class PopulationSimulator:
             y = segment.generate_outcome(x_full, D_i, self.noise_std, self.signal_d)
 
             # 7️⃣ Save
-            cust = Customer_pilot(x_full, D_i, y, segment, customer_id=i)
+            cust = Customer_pilot(x_full, D_i, y, segment, self.signal_d, customer_id=i)
             pilot_customers.append(cust)
 
         return pilot_customers

@@ -25,26 +25,44 @@ def structure_oracle(true_labels, pred_labels):
     """
     Compute structure recovery metrics comparing true vs estimated clusters.
 
-    Parameters:
-    - true_labels: ground-truth segment IDs (Z_i)
-    - pred_labels: estimated segment IDs (S_i^M)
-    - true_K: optional int, known true number of clusters
-
     Returns:
-    - dict with metrics: K-hit, ARI, NMI, VI
+    - dict with metrics: ARI, NMI
     """
     true_labels = np.array(true_labels).reshape(-1)
     pred_labels = np.array(pred_labels).reshape(-1)
 
-    metrics = {}
+    return {
+        'ARI': adjusted_rand_score(true_labels, pred_labels),
+        'NMI': normalized_mutual_info_score(true_labels, pred_labels),
+    }
 
-    # ARI
-    metrics['ARI'] = adjusted_rand_score(true_labels, pred_labels)
 
-    # NMI
-    metrics['NMI'] = normalized_mutual_info_score(true_labels, pred_labels)
+def oracle_profit_on_customers(customers, signal_d=None):
+    """
+    Compute the true per-customer oracle (first-best) total profit.
 
-    return metrics
+    For each customer x_i the oracle picks the action that maximises
+    cust.expected_outcome(a) over ALL actions a.  Because outcome depends
+    on both tau[a] AND delta[a]@x_i, using argmax(tau) alone is wrong
+    when interaction effects (delta) are present.
+
+    This quantity is guaranteed to be >= any algorithm's profit on the
+    same customer set, making it a valid normalising denominator.
+
+    Parameters
+    ----------
+    customers  : list of Customer_implement (or Customer_pilot)
+    signal_d   : ignored — each customer already carries its own signal_d
+
+    Returns
+    -------
+    float  total oracle expected profit
+    """
+    total = 0.0
+    for cust in customers:
+        action_num = len(cust.true_segment.tau)
+        total += max(cust.expected_outcome(a) for a in range(action_num))
+    return total
 
 
 def policy_oracle(customers, algo, signal_d=None):
@@ -57,44 +75,40 @@ def policy_oracle(customers, algo, signal_d=None):
 
     Parameters:
     - customers: list of Customer objects (each linked to true and estimated segments)
-    - signal_d: int, number of signal dimensions used in outcome model (pop.signal_d).
-                If None, uses full feature dimension (incorrect when disturb_d > 0).
+    - algo: algorithm name key into cust.est_segment
+    - signal_d: ignored — customers carry their own signal_d
 
     Returns:
     - dict with metrics: manager_profit, oracle_profit, regret, mistreatment_rate
     """
     manager_profit = 0.0
-    oracle_profit = 0.0
-    mistreated = 0
+    oracle_profit  = 0.0
+    mistreated     = 0
 
     for cust in customers:
-        x_i = cust.x
-        true_seg = cust.true_segment
-        est_seg = cust.est_segment[algo]
+        est_seg    = cust.est_segment[algo]
+        action_num = len(cust.true_segment.tau)
 
-        # Determine signal_d: use provided value, else fall back to full dim
-        sd = signal_d if signal_d is not None else len(x_i)
-
-        # Oracle action: best action for this segment (pre-computed from true tau)
-        oracle_action = true_seg.action
-        oracle_profit_i = true_seg.expected_outcome(x_i, oracle_action, signal_d=sd)
+        # True per-customer oracle: best action for this customer's x
+        oracle_profit_i = max(cust.expected_outcome(a) for a in range(action_num))
+        oracle_action   = max(range(action_num), key=cust.expected_outcome)
 
         # Manager policy
         if est_seg.est_action == 404:
             manager_profit_i = oracle_profit_i
         else:
-            manager_profit_i = true_seg.expected_outcome(x_i, est_seg.est_action, signal_d=sd)
+            manager_profit_i = cust.expected_outcome(est_seg.est_action)
 
-        # Mistreatment if manager’s action ≠ oracle
+        # Mistreatment if manager's action ≠ oracle
         if est_seg.est_action != oracle_action and est_seg.est_action != 404:
             mistreated += 1
 
-        oracle_profit += oracle_profit_i
+        oracle_profit  += oracle_profit_i
         manager_profit += manager_profit_i
 
     return {
-        "manager_profit": manager_profit,
-        "oracle_profit": oracle_profit,
-        "regret": (oracle_profit - manager_profit) / len(customers),
-        "mistreatment_rate": mistreated / len(customers)
+        "manager_profit":    manager_profit,
+        "oracle_profit":     oracle_profit,
+        "regret":            (oracle_profit - manager_profit) / len(customers),
+        "mistreatment_rate": mistreated / len(customers),
     }
