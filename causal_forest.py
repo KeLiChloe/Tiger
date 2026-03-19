@@ -64,10 +64,6 @@ def causal_forest_predict(implement_customers, x_mat, D_vec, y_vec,
     """
     from sklearn.ensemble import RandomForestRegressor
     
-    x_mat = x_mat[::2]  # Use every 2nd sample for faster execution (debugging)
-    D_vec = D_vec[::2]
-    y_vec = y_vec[::2]
-    
     # Identify unique actions
     unique_actions = np.unique(D_vec)
     n_actions = len(unique_actions)

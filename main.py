@@ -1,5 +1,5 @@
 from ground_truth import PopulationSimulator
-from plot import plot_ground_truth, plot_segmentation
+from plot import plot_ground_truth, plot_segmentation, plot_bernoulli_prob_histogram
 from gmm import GMM_segment_and_estimate
 from oracle import structure_oracle, policy_oracle, oracle_profit_on_customers
 import pandas as pd
@@ -81,7 +81,7 @@ def main(args, param_range):
     
     
 
-    for _ in trange(args.N_sims):
+    for sim_idx, _ in enumerate(trange(args.N_sims)):
         
         seed = random.randint(0, 100000)
         np.random.seed(seed)   # 5909, 67691
@@ -103,8 +103,13 @@ def main(args, param_range):
                                   outcome_type=outcome_type)
         # plot ground truth
         if args.plot:
-            df = pop.to_dataframe()
-            plot_ground_truth(df)
+            # df = pop.to_dataframe()
+            # plot_ground_truth(df)
+            plot_bernoulli_prob_histogram(
+                pop.implement_customers,
+                action_num=getattr(args, 'action_num', 2),
+                run_idx=sim_idx,
+            )
         
         algo_result_dict = {}
 
@@ -190,15 +195,15 @@ def main(args, param_range):
                     
                     # plot segmentation 
                     df = pop.to_dataframe()
-                    labels = df[f'{algo}_est_segment_id'][:int(N_total_pilot_customers * train_frac)]
-                    if args.plot and algo in ["dast", "kmeans-standard", "mst"]:
-                        # Pass tree object for DAST/MST to plot decision boundaries
-                        tree_obj = None
-                        if algo == "dast":
-                            tree_obj = dast_tree
-                        elif algo == "mst":
-                            tree_obj = mst_tree
-                        plot_segmentation(labels, x_mat_tr, y_vec_tr, D_vec_tr, f'{algo}', M=M, tree=tree_obj)
+                    # labels = df[f'{algo}_est_segment_id'][:int(N_total_pilot_customers * train_frac)]
+                    # if args.plot and algo in ["dast", "kmeans-standard", "mst"]:
+                    #     # Pass tree object for DAST/MST to plot decision boundaries
+                    #     tree_obj = None
+                    #     if algo == "dast":
+                    #         tree_obj = dast_tree
+                    #     elif algo == "mst":
+                    #         tree_obj = mst_tree
+                    #     plot_segmentation(labels, x_mat_tr, y_vec_tr, D_vec_tr, f'{algo}', M=M, tree=tree_obj)
                     
                     # Oracle evaluation
                     true_segment_ids_train = df['true_segment_id'].values[pop.train_indices]

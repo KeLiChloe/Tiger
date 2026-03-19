@@ -48,12 +48,12 @@ from plot_style import (
 METRICS = ("relative_comp", "relative_oracle", "regret")
 
 TITLE_MAP = {
-    ("relative_comp",   "d"):     "DAST Advantage Ratio vs. Dimension",
-    ("relative_comp",   "K"):     "DAST Advantage Ratio vs. Number of Clusters",
-    ("relative_comp",   "delta"): "DAST Advantage Ratio vs. Interaction Strength",
-    ("relative_oracle", "d"):     "DAST Advantage Ratio vs. Dimension",
-    ("relative_oracle", "K"):     "DAST Advantage Ratio vs. Number of Clusters",
-    ("relative_oracle", "delta"): "DAST Advantage Ratio vs. Interaction Strength",
+    ("relative_comp",   "d"):     "DAST Improvement Ratio (Relative to Comparator) vs. Dimension ",
+    ("relative_comp",   "K"):     "DAST Improvement Ratio (Relative to Comparator) vs. Number of Clusters",
+    ("relative_comp",   "delta"): "DAST Improvement Ratio (Relative to Comparator) vs. Interaction Strength",
+    ("relative_oracle", "d"):     "DAST Improvement Ratio (Relative to Oracle) vs. Dimension",
+    ("relative_oracle", "K"):     "DAST Improvement Ratio (Relative to Oracle) vs. Number of Clusters",
+    ("relative_oracle", "delta"): "DAST Improvement Ratio (Relative to Oracle) vs. Interaction Strength",
     ("regret",          "d"):     "Regret Ratio vs. Dimension",
     ("regret",          "K"):     "Regret Ratio vs. Number of Clusters",
     ("regret",          "delta"): "Regret Ratio vs. Interaction Strength",
@@ -377,9 +377,6 @@ def plot_from_csv(csv_path, out_fig, show_band=False, band_alpha=0.12):
 
     # Reference lines
     ax.axhline(0, color="black", linestyle="--", linewidth=1.0, alpha=0.75)
-    if metric == "relative_oracle":
-        ax.axhline(100, color="gray", linestyle=":", linewidth=1.0, alpha=0.6,
-                   label="Oracle (100%)")
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -401,7 +398,7 @@ def plot_from_csv(csv_path, out_fig, show_band=False, band_alpha=0.12):
         ax.set_ylim(ymin - pad, ymax + pad)
 
     handles, labels_leg = ax.get_legend_handles_labels()
-    ncol = min(max(len(labels_leg), 1), 4)
+    ncol = min(max(len(labels_leg), 1), 3)
     fig.legend(handles, labels_leg, ncol=ncol, frameon=False,
                loc="upper center", bbox_to_anchor=(AX_CENTER_X, LEGEND_Y),
                columnspacing=1.2, handlelength=2.2, handletextpad=0.6)

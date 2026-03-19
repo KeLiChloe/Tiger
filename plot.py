@@ -360,3 +360,69 @@ def plot_implementation_clustering(implement_customers, algo, title=None):
     plt.close()  # Close the figure to free memory
 
 
+def plot_bernoulli_prob_histogram(customers, action_num, run_idx=0, out_dir="figures"):
+    """
+    Plot the histogram of P(Y=1 | x_i, D=a) over all customers,
+    one overlaid distribution per action a.
+
+    Parameters
+    ----------
+    customers  : list of Customer_pilot or Customer_implement
+    action_num : number of actions
+    run_idx    : simulation index (used in filename)
+    out_dir    : output directory
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    action_colors = ['#1f77b4', '#d62728', '#2ca02c', '#ff7f0e',
+                     '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+
+    from scipy.stats import gaussian_kde
+
+    ncols = min(action_num, 3)
+    nrows = (action_num + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(4.5 * ncols, 3.5 * nrows),
+                             sharey=False)
+    axes = np.array(axes).ravel()
+
+    all_probs = []
+    for a in range(action_num):
+        probs = np.array([cust.expected_outcome(a) for cust in customers])
+        all_probs.append(probs)
+        ax = axes[a]
+        color = action_colors[a % len(action_colors)]
+
+        ax.hist(probs, bins=40, alpha=0.45, color=color,
+                edgecolor='none', density=True)
+
+        # KDE overlay
+        if probs.std() > 1e-6:
+            kde = gaussian_kde(probs, bw_method='scott')
+            xs = np.linspace(0, 1, 300)
+            ax.plot(xs, kde(xs), color=color, linewidth=2.0)
+
+        ax.axvline(probs.mean(), color='black', linestyle='--',
+                   linewidth=1.2, alpha=0.8,
+                   label=f"mean={probs.mean():.3f}")
+        ax.set_title(f"Action {a}", fontsize=11, fontweight='bold')
+        ax.set_xlabel("P(Y = 1 | x, D = a)", fontsize=10)
+        ax.set_ylabel("Density", fontsize=10)
+        ax.set_xlim(0, 1)
+        ax.legend(frameon=False, fontsize=9)
+        ax.grid(True, axis='y', alpha=0.3)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+    # Hide unused subplots
+    for a in range(action_num, len(axes)):
+        axes[a].set_visible(False)
+
+    fig.suptitle(f"Bernoulli Probability Distribution  (run {run_idx})",
+                 fontsize=13, fontweight='bold', y=1.02)
+
+    plt.tight_layout()
+    fname = os.path.join(out_dir, f"bernoulli_prob_hist_run{run_idx}.png")
+    plt.savefig(fname, dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"[plot] Bernoulli prob histogram saved -> {fname}")
