@@ -107,7 +107,7 @@ def main(args, param_range):
             # plot_ground_truth(df)
             plot_bernoulli_prob_histogram(
                 pop.implement_customers,
-                action_num=getattr(args, 'action_num', 2),
+                action_num=getattr(args, 'action_num'),
                 run_idx=sim_idx,
             )
         
@@ -144,7 +144,6 @@ def main(args, param_range):
                     # print(f"Running {algo} with M={M}...")
                     
                     depth_policy_tree = 1 if M <= 2 else (2 if M <=4 else (3 if M <= 8 else 4))
-                    depth_dast = 1 if M <= 2 else (2 if M <=4 else (3 if M <= 6 else 4))
                     depth_mst = 1 if M <= 2 else (2 if M <=4 else (3 if M <= 6 else 4))
                     
                     # Initialize algorithm-specific variables
@@ -180,7 +179,7 @@ def main(args, param_range):
                         DA_score_clr, _ = CLR_segment_and_estimate(pop, M, x_mat_tr, D_vec_tr, y_vec_tr, kmeans_coef=args.kmeans_coef, num_tries=8, algo=algo, include_interactions=include_interactions, random_state=seed)
                         
                     elif algo == "dast":
-                        dast_tree, dast_val_score, segment_dict = DAST_segment_and_estimate(pop, M, max_depth=depth_dast, min_leaf_size=2,  algo=algo, include_interactions=include_interactions, use_hybrid_method=args.use_hybrid_method)
+                        dast_tree, dast_val_score, segment_dict = DAST_segment_and_estimate(pop, M, min_leaf_size=2, algo=algo, use_hybrid_method=args.use_hybrid_method)
                     
                     elif algo == "mst":
                         mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, algo=algo, include_interactions=include_interactions)
@@ -286,8 +285,7 @@ def main(args, param_range):
                     assign_new_customers_to_pruned_tree(optimal_policy_tree, pop, pop.implement_customers, leaf_to_pruned_segment, algo)
 
                 elif algo == "dast":
-                    depth_dast = 1 if algo_picked_M <= 2 else (2 if algo_picked_M <=4 else (3 if algo_picked_M <= 6 else 4))
-                    optimal_dast_tree, _, segment_dict = DAST_segment_and_estimate(pop, algo_picked_M, max_depth=depth_dast, min_leaf_size=2, algo=algo, include_interactions=include_interactions, use_hybrid_method=args.use_hybrid_method)
+                    optimal_dast_tree, _, segment_dict = DAST_segment_and_estimate(pop, algo_picked_M, min_leaf_size=2, algo=algo, use_hybrid_method=args.use_hybrid_method)
                     optimal_dast_tree.predict_segment(pop.implement_customers, segment_dict) # Assign implementation customers to segments 
                 
                 elif algo == "mst":

@@ -47,7 +47,7 @@ def assign_trained_customers_to_segments(pop: PopulationSimulator, segment_label
         assert cust.est_segment[algo].segment_id == m, f"Segment ID mismatch for customer {cust.customer_id}: expected {m}, got {cust.est_segment[algo].segment_id}"
         
 
-def estimate_segment_parameters(X, D, Y, include_interactions, action_num):
+def estimate_segment_parameters(X, D, Y):
     """
     Estimate treatment effect and recommend action.
 
@@ -66,8 +66,6 @@ def estimate_segment_parameters(X, D, Y, include_interactions, action_num):
         X: (N, d) array of covariates (not used, kept for API compatibility)
         D: (N,) array of action indicators
         Y: (N,) array of outcomes
-        include_interactions: not used, kept for API compatibility
-        action_num: int, total number of possible actions (required; all must be present)
 
     Returns:
         est_tau: float, estimated treatment effect
@@ -78,12 +76,11 @@ def estimate_segment_parameters(X, D, Y, include_interactions, action_num):
 
     unique_actions_in_data = set(D.tolist())
 
-    # Strict check: all actions 0..action_num-1 must be present
-    for a in range(action_num):
-        if a not in unique_actions_in_data:
-            print(f"Warning: Action {a} missing in segment data.")
-            return 404, 404
-    
+    # # Strict check: all actions 0..action_num-1 must be present
+    # for a in range(action_num):
+    #     if a not in unique_actions_in_data:
+    #         print(f"Warning: Action {a} missing in segment data.")
+    #         return 404, 404
     
     # Compute mean outcome for each action
     action_means = {}
@@ -126,20 +123,12 @@ def plot_segment_sankey(original, pruned):
 
 
 # estimated total profits of a segment after applying the learnt policy to the customers in that segment
-def compute_node_DR_value(Y, D, gamma, indices, use_hybrid_method, action_num=None):
+def compute_node_DR_value(Y, D, gamma, indices, use_hybrid_method):
     D_m = D[indices]
     Y_m = Y[indices]
 
     unique_actions_in_data = np.unique(D_m)
-    
-    # Strict check: all actions 0..action_num-1 must be present
-    if action_num is not None:
-        for a in range(action_num):
-            if a not in unique_actions_in_data:
-                return 0
-    elif len(unique_actions_in_data) < 2:
-        return 0
-    
+
     # Compute mean outcome for each action
     action_means = {}
     for action in unique_actions_in_data:

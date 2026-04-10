@@ -36,9 +36,7 @@ def compute_residual_value(X, Y, D, indices, include_interactions, action_num=No
         try:
             model.fit(X_design, y_flat)
             proba = model.predict_proba(X_design) + np.random.uniform(-1,1)
-            # Clip row-wise: index by the true label to get P(y=y_i | x_i)
             p_true = np.clip(proba[np.arange(len(y_flat)), y_flat], 1e-9, 1 - 1e-9)
-            # Return negative log-likelihood (lower = better fit, consistent with RSS)
             return -np.sum(np.log(p_true))
         except Exception:
             # Fallback: null-model deviance (intercept only)
@@ -259,7 +257,7 @@ class MSTree:
         X_seg = data['X'][indices]
         D_seg = data['D'][indices]
         Y_seg = data['Y'][indices]
-        est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg, include_interactions, self.action_num)
+        est_tau, est_action = estimate_segment_parameters(X_seg, D_seg, Y_seg)
         segment = SegmentEstimate(est_tau, est_action, segment_id)
         for i in indices:
             customers[i].est_segment[f"{self.algo}"] = segment

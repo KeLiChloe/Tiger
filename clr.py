@@ -78,7 +78,7 @@ def best_clr(X_D, y, k, num_tries=5, **kwargs):
             best_weights = weights
     return best_cluster_labels, best_models, best_weights, best_obj
 
-def clr(X_D, y, k, kmeans_coef, lr=None, max_iter=10, cluster_labels=None, is_discrete=False):
+def clr(X_D, y, k, kmeans_coef, lr=None, max_iter=5, cluster_labels=None, is_discrete=False):
 
     if cluster_labels is None:
         cluster_labels = np.random.choice(k, size=X_D.shape[0])
@@ -219,7 +219,7 @@ def CLR_segment_and_estimate(pop: PopulationSimulator, n_segments: int, x_mat, D
         D_m = D_vec[idx_m]
         y_m = y_vec[idx_m]
         
-        est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m, include_interactions, pop.action_num)
+        est_tau, est_action = estimate_segment_parameters(x_m, D_m, y_m)
         est_seg = SegmentEstimate(est_tau, est_action, segment_id=m)
         pop.est_segments_list[f"{algo}"].append(est_seg)
 

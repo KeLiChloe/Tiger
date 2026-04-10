@@ -157,7 +157,7 @@ def estimate_segment_and_assign(pop: PopulationSimulator, target_leaf_num, segme
         D_m = D_vec[idx_m]
         y_m = y_vec[idx_m]
 
-        est_tau, _ = estimate_segment_parameters(x_m, D_m, y_m, include_interactions, pop.action_num)
+        est_tau, _ = estimate_segment_parameters(x_m, D_m, y_m)
         
         est_action = action_ids[idx_m[0]]
         assert np.all(action_ids[idx_m] == action_ids[idx_m[0]]), "Inconsistent actions within segment"
