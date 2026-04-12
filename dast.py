@@ -328,7 +328,7 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments,
     }
 
     # Candidate thresholds: quantile-based binning per feature
-    B = 300
+    B = 200
     H = {}
     for j in range(data_train["X"].shape[1]):
         sv       = np.sort(np.unique(data_train["X"][:, j]))

@@ -102,6 +102,7 @@ def plot(filtered_ratios):
         "gmm-standard":    "#64B5CD", # Light Blue
         "clr-standard":    "#9467BD", # Purple
         "mst":             "#937860", # Brown
+        "dast_old":        "#1F77B4", # Blue
         "t_learner":       "#FF7F0E", # Orange
         "s_learner":       "#55A868", # Green
         "x_learner":       "#4EBEC4", # Teal
@@ -116,6 +117,7 @@ def plot(filtered_ratios):
         "gmm-standard":    "vs. GMM",
         "clr-standard":    "vs. CLR",
         "mst":             "vs. MST",
+        "dast_old":        "vs. DAST (old)",
         "t_learner":       "vs. T-Learner",
         "s_learner":       "vs. S-Learner",
         "x_learner":       "vs. X-Learner",
@@ -125,7 +127,7 @@ def plot(filtered_ratios):
 
     # Order of display (optional, can adjust)
     preferred_order = [
-        "kmeans-standard", "gmm-standard", "clr-standard", "mst",
+        "kmeans-standard", "gmm-standard", "clr-standard", "mst", "dast_old",
         "dr_learner", "s_learner", "t_learner", "x_learner", "policy_tree"
     ]
 
@@ -321,7 +323,8 @@ def plot_regret(filtered_ratios):
     })
 
     palette = {
-        "dast":            "#2CA02CAF",
+        "dast":            "#E41A1C",
+        "dast_old":        "#1F77B4",
         "kmeans-standard": "#CCB974",
         "gmm-standard":    "#64B5CD",
         "clr-standard":    "#9467BD",
@@ -335,6 +338,7 @@ def plot_regret(filtered_ratios):
     }
     label_map = {
         "dast":            "DAST",
+        "dast_old":        "DAST (old)",
         "kmeans-standard": "K-Means",
         "gmm-standard":    "GMM",
         "clr-standard":    "CLR",
@@ -347,7 +351,7 @@ def plot_regret(filtered_ratios):
         "causal_forest":   "Causal Forest",
     }
     preferred_order = [
-        "dast",
+        "dast", "dast_old",
         "kmeans-standard", "gmm-standard", "clr-standard", "mst",
         "t_learner", "s_learner", "x_learner", "dr_learner",
         "causal_forest", "policy_tree",
@@ -468,6 +472,7 @@ def filter_ratios(improvement_ratios, apply_remove_extreme, apply_sigma_clip):
 _IGNORE = {'dast', 'exp_params', 'seed', 'oracle_profits_impl'}
 
 apply_remove_extreme = {
+    "dast_old":        True,
     "gmm-standard":    True,
     "kmeans-standard": True,
     "mst":             True,

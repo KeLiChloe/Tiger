@@ -65,9 +65,11 @@ YLABEL_MAP = {
     "regret":          "(oracle - algo) / oracle (%)",
 }
 
-# dast gets its own color in regret mode
-DAST_COLOR = "#E41A1CAF"
-DAST_LABEL = "DAST"
+# dast / dast_old get distinct colors; both highlighted in regret mode
+DAST_COLOR     = "#E41A1CAF"
+DAST_LABEL     = "DAST"
+DAST_OLD_COLOR = "#1F77B4AF"
+DAST_OLD_LABEL = "DAST (old)"
 
 
 # ---------------------------------------------------------------
@@ -343,11 +345,11 @@ def plot_from_csv(csv_path, out_fig, show_band=False, band_alpha=0.12):
     algos_present = list(df["algo"].unique())
 
     if metric == "regret":
-        # All algos as lines; dast highlighted
-        order = ["dast"] + [a for a in COMPARATOR_ORDER if a in algos_present]
+        # All algos as lines; dast / dast_old highlighted
+        order = ["dast", "dast_old"] + [a for a in COMPARATOR_ORDER if a in algos_present]
         algos = order + [a for a in algos_present if a not in order]
     else:
-        # Only comparators (no dast line)
+        # Only comparators (no dast line); dast_old treated as comparator
         order = [a for a in COMPARATOR_ORDER if a in algos_present]
         algos = order + [a for a in algos_present if a not in order and a != "dast"]
 
@@ -359,6 +361,9 @@ def plot_from_csv(csv_path, out_fig, show_band=False, band_alpha=0.12):
         if algo == "dast":
             ls = "--" if metric == "regret" else "-"
             color, label, lw, zo = DAST_COLOR, DAST_LABEL, 2.5, 5
+        elif algo == "dast_old":
+            ls = "--" if metric == "regret" else "-"
+            color, label, lw, zo = DAST_OLD_COLOR, DAST_OLD_LABEL, 2.3, 4
         else:
             color = DEFAULT_COLORS.get(algo, None)
             label = LABEL_MAP.get(algo, algo)
