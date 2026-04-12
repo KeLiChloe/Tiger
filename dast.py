@@ -3,7 +3,8 @@ DAST (Decision-Aware Segmentation Tree)
 
 Best-first tree growth: starting from a single root leaf, greedily expand
 the leaf whose best admissible split gives the largest DR-value gain, until
-exactly M leaves are reached or no positive-gain split exists.
+exactly M leaves are reached or no admissible split exists (min_leaf_size
+constraint). Non-positive-gain splits are allowed to reach the target M.
 """
 
 import warnings
@@ -87,15 +88,22 @@ class DASTree:
                     best_leaf  = leaf
                     best_split = split
 
-            # Early termination if no positive-gain split exists
-            if best_global_gain <= 0 or best_leaf is None or best_split is None:
+            # Hard stop: no admissible split exists anywhere in the tree
+            if best_leaf is None or best_split is None:
                 warnings.warn(
-                    f"DAST terminates early with {len(self.leaf_nodes)} leaves. "
-                    f"Target M={M} cannot be reached without a non-positive-gain split. "
-                    f"Consider reducing M.",
+                    f"DAST terminates early with {len(self.leaf_nodes)} leaves "
+                    f"(target M={M}): no admissible split satisfies min_leaf_size constraints.",
                     stacklevel=2,
                 )
                 break
+
+            # Soft warning: best available gain is non-positive, but we keep splitting
+            if best_global_gain <= 0:
+                warnings.warn(
+                    f"DAST: non-positive gain split (gain={best_global_gain:.4f}) at "
+                    f"{len(self.leaf_nodes)} leaves (target M={M}).",
+                    stacklevel=2,
+                )
 
             # Apply the best split
             feat, thresh, left_idx, right_idx = best_split
@@ -320,7 +328,7 @@ def DAST_segment_and_estimate(pop: PopulationSimulator, n_segments,
     }
 
     # Candidate thresholds: quantile-based binning per feature
-    B = 200
+    B = 300
     H = {}
     for j in range(data_train["X"].shape[1]):
         sv       = np.sort(np.unique(data_train["X"][:, j]))

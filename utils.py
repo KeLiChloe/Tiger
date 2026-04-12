@@ -51,8 +51,6 @@ def estimate_segment_parameters(X, D, Y):
     """
     Estimate treatment effect and recommend action.
 
-    STRICT REQUIREMENT: All actions in 0..action_num-1 must have samples in the data.
-
     For binary treatment (2 actions):
         - est_tau = mean(Y|D=1) - mean(Y|D=0)
         - est_action = 1 if est_tau >= 0 else 0
@@ -218,8 +216,8 @@ def pick_M_for_algo(algo, df_results_M):
 
     val_col = f'{algo}_val'
 
-    max_val_algos = ["gmm-da", "kmeans-da", "clr-da", "policy_tree", 
-                     "dast", "mst", "kmeans-standard"]
+    max_val_algos = ["gmm-da", "kmeans-da", "clr-da", "policy_tree",
+                     "dast", "dast_old", "mst", "kmeans-standard"]
     min_val_algos = ["gmm-standard", "clr-standard"]
     meta_learners = ["t_learner", "s_learner", "x_learner", 
                      "dr_learner", "causal_forest"]

@@ -276,7 +276,7 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
     
     # Generate candidate thresholds using quantile-based binning
     # Use B bins to reduce computational cost
-    B = 10  # Use threshold_grid as number of bins
+    B = 100  # Use threshold_grid as number of bins
     H = {}
     for j in range(data_train["X"].shape[1]):
         sorted_values = np.sort(np.unique(data_train["X"][:, j]))

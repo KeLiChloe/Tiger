@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from policy_tree import policy_tree_segment_and_estimate, assign_new_customers_to_pruned_tree
 from dast import DAST_segment_and_estimate
+from dast_old import DAST_segment_and_estimate as DAST_old_segment_and_estimate
 from mst import MST_segment_and_estimate
 from kmeans import KMeans_segment_and_estimate
 from clr import CLR_segment_and_estimate
@@ -148,6 +149,7 @@ def main(args, param_range):
                     
                     # Initialize algorithm-specific variables
                     dast_val_score = None
+                    dast_old_val_score = None
                     mst_val_score = None
                     policy_tree_val_score = None
                     silhouette_score, bic_gmm, bic_clr = None, None, None
@@ -180,7 +182,11 @@ def main(args, param_range):
                         
                     elif algo == "dast":
                         dast_tree, dast_val_score, segment_dict = DAST_segment_and_estimate(pop, M, min_leaf_size=2, algo=algo, use_hybrid_method=args.use_hybrid_method)
-                    
+
+                    elif algo == "dast_old":
+                        depth_dast_old = 1 if M <= 2 else (2 if M <= 4 else (3 if M <= 6 else 4))
+                        dast_old_tree, dast_old_val_score, segment_dict = DAST_old_segment_and_estimate(pop, M, max_depth=depth_dast_old, min_leaf_size=2, algo=algo, include_interactions=include_interactions, use_hybrid_method=args.use_hybrid_method)
+
                     elif algo == "mst":
                         mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, algo=algo, include_interactions=include_interactions)
                         
@@ -214,6 +220,7 @@ def main(args, param_range):
                     results_M.append({
                         "M": M if algo not in ["t_learner", "x_learner", "dr_learner", "s_learner", "causal_forest"] else 0,
                         "dast_val": dast_val_score if algo == "dast" else None,
+                        "dast_old_val": dast_old_val_score if algo == "dast_old" else None,
                         "policy_tree_val": policy_tree_val_score if algo == "policy_tree" else None,
                         "mst_val": mst_val_score if algo == "mst" else None,
                         "kmeans-standard_val": silhouette_score if algo == "kmeans-standard" else None,
@@ -286,8 +293,13 @@ def main(args, param_range):
 
                 elif algo == "dast":
                     optimal_dast_tree, _, segment_dict = DAST_segment_and_estimate(pop, algo_picked_M, min_leaf_size=2, algo=algo, use_hybrid_method=args.use_hybrid_method)
-                    optimal_dast_tree.predict_segment(pop.implement_customers, segment_dict) # Assign implementation customers to segments 
-                
+                    optimal_dast_tree.predict_segment(pop.implement_customers, segment_dict)
+
+                elif algo == "dast_old":
+                    depth_dast_old = 1 if algo_picked_M <= 2 else (2 if algo_picked_M <= 4 else (3 if algo_picked_M <= 6 else 4))
+                    optimal_dast_old_tree, _, segment_dict = DAST_old_segment_and_estimate(pop, algo_picked_M, max_depth=depth_dast_old, min_leaf_size=2, algo=algo, include_interactions=include_interactions, use_hybrid_method=args.use_hybrid_method)
+                    optimal_dast_old_tree.predict_segment(pop.implement_customers, segment_dict)
+
                 elif algo == "mst":
                     depth_mst = 1 if algo_picked_M <= 2 else (2 if algo_picked_M <=4 else (3 if algo_picked_M <= 6 else 4))
                     optimal_mst_tree, mst_val_score, segment_dict = MST_segment_and_estimate(pop, algo_picked_M, max_depth=depth_mst, min_leaf_size=2, epsilon=1e-2, algo=algo, include_interactions=include_interactions)
