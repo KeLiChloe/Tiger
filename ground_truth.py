@@ -227,19 +227,32 @@ class PopulationSimulator:
         pr = self.param_range  # alias for convenience
         true_segments = []
         
+        def _logit(p):
+            return np.log(p / (1.0 - p))
+
         def _make_segment_params(k, x_mean=None):
             """Sample outcome parameters for one segment.
 
-            Continuous : alpha ~ Uniform(alpha_range); beta, tau sampled directly.
-            Discrete   : target_p ~ Uniform(target_p_range) sets P(Y=1|x=x_mean, D=0).
-                         alpha is back-computed so that sigmoid(alpha + beta@x_mean) = target_p,
-                         i.e. alpha = logit(target_p) - beta@x_mean[:signal_d].
-                         This decouples sparsity control (target_p) from x-heterogeneity (beta).
+            Continuous : alpha ~ Uniform(alpha_range); beta, tau ~ Uniform(tau_range).
+
+            Discrete (target_p mode):
+              For EVERY action a (including a=0), we sample a target probability
+                target_p_a ~ Uniform(target_p_range)
+              and back-compute parameters so that
+                P(Y=1 | D=a, x=x_mean) = target_p_a  for all a.
+
+              Concretely:
+                alpha  = logit(target_p_0) - beta@x_mean        [absorbs x_mean baseline]
+                tau[a] = logit(target_p_a) - logit(target_p_0)
+                         - delta[a]@x_mean                       [absorbs delta@x_mean offset]
+
+              This ensures that delta@x only contributes *deviations* around x_mean,
+              so the sigmoid is not saturated even when x_mean is large.
+              tau_range is ignored in discrete mode (tau is derived, not sampled freely).
             """
             beta = np.random.uniform(*pr["beta"], size=self.d)
-            tau_vec = np.zeros(self.action_num)
-            for a in range(1, self.action_num):
-                tau_vec[a] = np.random.uniform(*pr["tau"])
+
+            # Generate delta FIRST — required before back-computing tau in discrete mode
             if pr.get("delta") is not None:
                 delta_mat = np.zeros((self.action_num, self.d))
                 for a in range(1, self.action_num):
@@ -247,16 +260,32 @@ class PopulationSimulator:
             else:
                 delta_mat = None
 
+            sd = self.signal_d
+            xm = x_mean[:sd] if x_mean is not None else None
+
             if pr.get("target_p") is not None:
-                # Discrete: back-compute alpha from target baseline probability
-                target_p = np.random.uniform(*pr["target_p"])
-                target_p = np.clip(target_p, 1e-6, 1 - 1e-6)
-                logit_target = np.log(target_p / (1.0 - target_p))
-                beta_dot_xmean = beta[:self.signal_d] @ x_mean[:self.signal_d] if x_mean is not None else 0.0
-                alpha = logit_target - beta_dot_xmean
+                # --- Discrete mode: back-compute alpha and tau from target probabilities ---
+                # Step 1: baseline (D=0)
+                target_p_0 = np.clip(np.random.uniform(*pr["target_p"]), 1e-6, 1 - 1e-6)
+                logit_0    = _logit(target_p_0)
+                beta_dot   = float(beta[:sd] @ xm) if xm is not None else 0.0
+                alpha      = logit_0 - beta_dot          # sigmoid(alpha + beta@x_mean) = target_p_0
+
+                # Step 2: non-baseline actions (a >= 1)
+                tau_vec = np.zeros(self.action_num)      # tau[0] = 0 by convention
+                for a in range(1, self.action_num):
+                    target_p_a  = np.clip(np.random.uniform(*pr["target_p"]), 1e-6, 1 - 1e-6)
+                    logit_a     = _logit(target_p_a)
+                    delta_dot   = float(delta_mat[a, :sd] @ xm) if (xm is not None and delta_mat is not None) else 0.0
+                    # sigmoid(alpha + beta@x_mean + tau[a] + delta[a]@x_mean) = target_p_a
+                    # => tau[a] = logit_a - logit_0 - delta[a]@x_mean
+                    tau_vec[a]  = logit_a - logit_0 - delta_dot
             else:
-                # Continuous: sample alpha directly
-                alpha = np.random.uniform(*pr["alpha"])
+                # --- Continuous mode: sample alpha and tau directly ---
+                alpha   = np.random.uniform(*pr["alpha"])
+                tau_vec = np.zeros(self.action_num)
+                for a in range(1, self.action_num):
+                    tau_vec[a] = np.random.uniform(*pr["tau"])
 
             return dict(alpha=alpha, beta=beta, tau=tau_vec, delta=delta_mat)
 

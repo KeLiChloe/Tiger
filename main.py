@@ -385,11 +385,11 @@ if __name__ == "__main__":
         return getattr(args, name, None) is not None
 
     # ── Parameter requirements per outcome type ──────────────────────────────
-    # beta/tau/x_mean are shared; alpha is continuous-only; target_p is discrete-only
-    SHARED_REQUIRED  = ['beta_range', 'tau_range', 'x_mean_range']
+    # beta/x_mean are shared; alpha/tau/Y_noise_std are continuous-only; target_p is discrete-only
+    SHARED_REQUIRED  = ['beta_range', 'x_mean_range']
     SHARED_OPTIONAL  = ['delta_range']       # treatment-covariate interactions, optional for both
-    CONTINUOUS_ONLY  = ['alpha_range', 'Y_noise_std_scale']
-    DISCRETE_ONLY    = ['target_p_range']    # back-computes alpha per segment
+    CONTINUOUS_ONLY  = ['alpha_range', 'tau_range', 'Y_noise_std_scale']
+    DISCRETE_ONLY    = ['target_p_range']    # back-computes alpha and tau per segment
 
     for r in SHARED_REQUIRED:
         if not _is_set(r):
@@ -429,9 +429,9 @@ if __name__ == "__main__":
         if not (0 < lo < hi < 1):
             raise ValueError(f"--target_p_range must satisfy 0 < lo < hi < 1, got {lo} {hi}.")
         param_range = {
-            "alpha":    None,           # will be back-computed from target_p per segment
+            "alpha":    None,           # back-computed from target_p per segment
             "beta":     tuple(args.beta_range),
-            "tau":      tuple(args.tau_range),
+            "tau":      None,           # back-computed from target_p per action per segment
             "delta":    tuple(args.delta_range) if _is_set('delta_range') else None,
             "x_mean":   tuple(args.x_mean_range),
             "target_p": tuple(args.target_p_range),

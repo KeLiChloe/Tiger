@@ -263,7 +263,8 @@ def parse_args():
                         help="Outcome type: 'continuous' (linear regression) or 'discrete' (Bernoulli)")
     parser.add_argument("--alpha_range", type=float, nargs=2, help="Range for alpha intercept (continuous only)")
     parser.add_argument("--beta_range",  type=float, nargs=2, help="Range for covariate effect beta (both outcome types)")
-    parser.add_argument("--tau_range",   type=float, nargs=2, help="Range for treatment effect tau (both outcome types)")
+    parser.add_argument("--tau_range",   type=float, nargs=2, default=None,
+                        help="Range for treatment effect tau (continuous only; ignored/not needed for discrete)")
     parser.add_argument("--target_p_range", type=float, nargs=2,
                         help="[discrete only] Target P(Y=1 | x=x_mean, D=0) range. "
                              "Alpha is back-computed so the baseline probability at the segment "
