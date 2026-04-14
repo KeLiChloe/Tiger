@@ -266,9 +266,15 @@ def parse_args():
     parser.add_argument("--tau_range",   type=float, nargs=2, default=None,
                         help="Range for treatment effect tau (continuous only; ignored/not needed for discrete)")
     parser.add_argument("--target_p_range", type=float, nargs=2,
-                        help="[discrete only] Target P(Y=1 | x=x_mean, D=0) range. "
-                             "Alpha is back-computed so the baseline probability at the segment "
-                             "centre exactly equals target_p. Replaces --alpha_range for discrete.")
+                        help="[discrete only] P(Y=1 | x=x_mean, D=a) range for NON-winner actions "
+                             "(or all actions when --winner_p_range is not set). "
+                             "Alpha and tau are back-computed to hit these targets exactly.")
+    parser.add_argument("--winner_p_range", type=float, nargs=2, default=None,
+                        help="[discrete only, optional] P(Y=1 | x=x_mean, D=a*) range for the "
+                             "WINNER action (randomly chosen per segment). When set, one action per "
+                             "segment gets a probability drawn from this range while all other "
+                             "actions use --target_p_range, ensuring a clear best action. "
+                             "Example: --target_p_range 0.02 0.10 --winner_p_range 0.15 0.40")
     parser.add_argument("--delta_range", type=float, nargs=2, help="Range for delta (interaction) parameter (continuous only)")
     parser.add_argument("--x_mean_range", type=float, nargs=2, help="Range for x_mean parameter")
 

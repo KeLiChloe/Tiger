@@ -362,8 +362,13 @@ def plot_implementation_clustering(implement_customers, algo, title=None):
 
 def plot_bernoulli_prob_histogram(customers, action_num, run_idx=0, out_dir="figures"):
     """
-    Plot the histogram of P(Y=1 | x_i, D=a) over all customers,
-    one overlaid distribution per action a.
+    Plot P(Y=1 | x_i, D=a) distributions broken down by segment × action.
+
+    Layout : rows = segments (K),  cols = actions (A)
+    Each cell shows:
+      - histogram + KDE of P(Y=1|x_i, D=a) for customers in that segment
+      - red dashed vertical line at the anchor probability p*_{k,a}  (evaluated at x_mean)
+      - green border / star in title when this action is the segment's optimal action
 
     Parameters
     ----------
@@ -372,57 +377,86 @@ def plot_bernoulli_prob_histogram(customers, action_num, run_idx=0, out_dir="fig
     run_idx    : simulation index (used in filename)
     out_dir    : output directory
     """
+    from scipy.stats import gaussian_kde
+    from ground_truth import _sigmoid
+
     os.makedirs(out_dir, exist_ok=True)
 
     action_colors = ['#1f77b4', '#d62728', '#2ca02c', '#ff7f0e',
                      '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
 
-    from scipy.stats import gaussian_kde
+    # Group customers by segment
+    seg_map = {}
+    for c in customers:
+        sid = c.true_segment.segment_id
+        seg_map.setdefault(sid, []).append(c)
+    seg_ids = sorted(seg_map.keys())
+    K = len(seg_ids)
+    A = action_num
 
-    ncols = min(action_num, 3)
-    nrows = (action_num + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(4.5 * ncols, 3.5 * nrows),
-                             sharey=False)
-    axes = np.array(axes).ravel()
+    fig, axes = plt.subplots(K, A,
+                             figsize=(4.0 * A, 3.2 * K),
+                             squeeze=False)
 
-    all_probs = []
-    for a in range(action_num):
-        probs = np.array([cust.expected_outcome(a) for cust in customers])
-        all_probs.append(probs)
-        ax = axes[a]
-        color = action_colors[a % len(action_colors)]
+    for row, sid in enumerate(seg_ids):
+        seg_custs = seg_map[sid]
+        seg       = seg_custs[0].true_segment
+        best_a    = seg.action          # optimal action at x_mean
 
-        ax.hist(probs, bins=40, alpha=0.45, color=color,
-                edgecolor='none', density=True)
+        for col in range(A):
+            ax    = axes[row, col]
+            color = action_colors[col % len(action_colors)]
 
-        # KDE overlay
-        if probs.std() > 1e-6:
-            kde = gaussian_kde(probs, bw_method='scott')
-            xs = np.linspace(0, 1, 300)
-            ax.plot(xs, kde(xs), color=color, linewidth=2.0)
+            probs = np.array([c.expected_outcome(col) for c in seg_custs])
 
-        ax.axvline(probs.mean(), color='black', linestyle='--',
-                   linewidth=1.2, alpha=0.8,
-                   label=f"mean={probs.mean():.3f}")
-        ax.set_title(f"Action {a}", fontsize=11, fontweight='bold')
-        ax.set_xlabel("P(Y = 1 | x, D = a)", fontsize=10)
-        ax.set_ylabel("Density", fontsize=10)
-        ax.set_xlim(0, 1)
-        ax.legend(frameon=False, fontsize=9)
-        ax.grid(True, axis='y', alpha=0.3)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
+            # Histogram
+            ax.hist(probs, bins=30, alpha=0.45, color=color,
+                    edgecolor='none', density=True)
 
-    # Hide unused subplots
-    for a in range(action_num, len(axes)):
-        axes[a].set_visible(False)
+            # KDE overlay
+            if probs.std() > 1e-6:
+                kde = gaussian_kde(probs, bw_method='scott')
+                xs  = np.linspace(0, 1, 300)
+                ax.plot(xs, kde(xs), color=color, linewidth=1.8)
 
-    fig.suptitle(f"Bernoulli Probability Distribution  (run {run_idx})",
-                 fontsize=13, fontweight='bold', y=1.02)
+            # Mean of distribution
+            ax.axvline(probs.mean(), color='red', linestyle='--',
+                       linewidth=1.4, alpha=0.9,
+                       label=f"mean={probs.mean():.3f}")
 
+            # Column header: "D = a" only on the top row
+            if row == 0:
+                ax.set_title(f"D = {col}", fontsize=11, fontweight='bold', pad=6)
+
+            # Row label: "Seg k  (★ D=best_a)" only on the leftmost column
+            if col == 0:
+                ax.set_ylabel(
+                    f"Seg {sid} \n\nDensity",
+                    fontsize=9, labelpad=6
+                )
+            else:
+                ax.set_ylabel("")
+
+            # x-axis label only on the bottom row
+            if row == K - 1:
+                ax.set_xlabel("P(Y=1 | x, D=a)", fontsize=9)
+            else:
+                ax.set_xlabel("")
+
+            # Green border for best action column within this row
+            for spine in ax.spines.values():
+                spine.set_linewidth(2.0 if col == best_a else 0.6)
+                spine.set_edgecolor('#2ca02c' if col == best_a else '#cccccc')
+
+            ax.set_xlim(0, 1)
+            ax.legend(frameon=False, fontsize=8)
+            ax.grid(True, axis='y', alpha=0.25)
+
+    fig.suptitle(f"Bernoulli Probability by Segment × Action  (run {run_idx})",
+                 fontsize=13, fontweight='bold', y=1.01)
     plt.tight_layout()
+
     fname = os.path.join(out_dir, f"bernoulli_prob_hist_run{run_idx}.png")
-    plt.savefig(fname, dpi=200, bbox_inches='tight')
+    plt.savefig(fname, dpi=180, bbox_inches='tight')
     plt.close()
     print(f"[plot] Bernoulli prob histogram saved -> {fname}")

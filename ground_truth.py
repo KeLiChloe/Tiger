@@ -265,8 +265,20 @@ class PopulationSimulator:
 
             if pr.get("target_p") is not None:
                 # --- Discrete mode: back-compute alpha and tau from target probabilities ---
+
+                # If winner_p is set, one random action gets a high probability (winner);
+                # all others get a low probability (loser). This guarantees a clear best action.
+                winner_a = (np.random.randint(0, self.action_num)
+                            if pr.get("winner_p") is not None else None)
+                print(f"    Segment {k}: winner_a={winner_a} (if any)")
+
+                def _sample_p(a):
+                    if winner_a is not None and a == winner_a:
+                        return np.clip(np.random.uniform(*pr["winner_p"]), 1e-6, 1 - 1e-6)
+                    return np.clip(np.random.uniform(*pr["target_p"]), 1e-6, 1 - 1e-6)
+
                 # Step 1: baseline (D=0)
-                target_p_0 = np.clip(np.random.uniform(*pr["target_p"]), 1e-6, 1 - 1e-6)
+                target_p_0 = _sample_p(0)
                 logit_0    = _logit(target_p_0)
                 beta_dot   = float(beta[:sd] @ xm) if xm is not None else 0.0
                 alpha      = logit_0 - beta_dot          # sigmoid(alpha + beta@x_mean) = target_p_0
@@ -274,7 +286,7 @@ class PopulationSimulator:
                 # Step 2: non-baseline actions (a >= 1)
                 tau_vec = np.zeros(self.action_num)      # tau[0] = 0 by convention
                 for a in range(1, self.action_num):
-                    target_p_a  = np.clip(np.random.uniform(*pr["target_p"]), 1e-6, 1 - 1e-6)
+                    target_p_a  = _sample_p(a)
                     logit_a     = _logit(target_p_a)
                     delta_dot   = float(delta_mat[a, :sd] @ xm) if (xm is not None and delta_mat is not None) else 0.0
                     # sigmoid(alpha + beta@x_mean + tau[a] + delta[a]@x_mean) = target_p_a

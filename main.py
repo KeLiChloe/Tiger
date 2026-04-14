@@ -428,6 +428,13 @@ if __name__ == "__main__":
         lo, hi = args.target_p_range
         if not (0 < lo < hi < 1):
             raise ValueError(f"--target_p_range must satisfy 0 < lo < hi < 1, got {lo} {hi}.")
+        if _is_set('winner_p_range'):
+            wlo, whi = args.winner_p_range
+            if not (0 < wlo < whi < 1):
+                raise ValueError(f"--winner_p_range must satisfy 0 < lo < hi < 1, got {wlo} {whi}.")
+            if wlo < hi:
+                print(f"Warning: winner_p_range [{wlo},{whi}] overlaps target_p_range [{lo},{hi}]. "
+                      f"Consider setting winner_p_range > target_p_range for a clear gap.")
         param_range = {
             "alpha":    None,           # back-computed from target_p per segment
             "beta":     tuple(args.beta_range),
@@ -435,6 +442,7 @@ if __name__ == "__main__":
             "delta":    tuple(args.delta_range) if _is_set('delta_range') else None,
             "x_mean":   tuple(args.x_mean_range),
             "target_p": tuple(args.target_p_range),
+            "winner_p": tuple(args.winner_p_range) if _is_set('winner_p_range') else None,
         }
 
     else:
