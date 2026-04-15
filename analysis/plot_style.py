@@ -40,7 +40,7 @@ DEFAULT_COLORS = {
     "gmm-standard":    "#006135AF",
     "clr-standard":    "#F59134AF",
     "mst":             "#937860AF",
-    "dast_old":        "#1F77B4AF",
+    "dast_old":        "#C2C2C2AE",
     "t_learner":       "#6BC735AF",
     "s_learner":       "#1F5BFFAF",
     "x_learner":       "#FF5832AD",

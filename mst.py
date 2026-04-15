@@ -35,7 +35,7 @@ def compute_residual_value(X, Y, D, indices, include_interactions, action_num=No
         model = LogisticRegression(fit_intercept=False, solver='lbfgs', max_iter=2000)
         try:
             model.fit(X_design, y_flat)
-            proba = model.predict_proba(X_design) + np.random.uniform(-1,1)
+            proba = model.predict_proba(X_design)
             p_true = np.clip(proba[np.arange(len(y_flat)), y_flat], 1e-9, 1 - 1e-9)
             return -np.sum(np.log(p_true))
         except Exception:
@@ -276,7 +276,7 @@ def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, mi
     
     # Generate candidate thresholds using quantile-based binning
     # Use B bins to reduce computational cost
-    B = 100  # Use threshold_grid as number of bins
+    B = 50  # Use threshold_grid as number of bins
     H = {}
     for j in range(data_train["X"].shape[1]):
         sorted_values = np.sort(np.unique(data_train["X"][:, j]))

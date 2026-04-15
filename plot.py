@@ -452,7 +452,7 @@ def plot_bernoulli_prob_histogram(customers, action_num, run_idx=0, out_dir="fig
             ax.legend(frameon=False, fontsize=8)
             ax.grid(True, axis='y', alpha=0.25)
 
-    fig.suptitle(f"Bernoulli Probability by Segment × Action  (run {run_idx})",
+    fig.suptitle(f"Bernoulli Probability by Segment × Action",
                  fontsize=13, fontweight='bold', y=1.01)
     plt.tight_layout()
 
