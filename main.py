@@ -160,7 +160,7 @@ def _run_one_sim(packed_args):
 
             for M in M_range:
                 depth_pt  = 1 if M <= 2 else (2 if M <= 4 else (3 if M <= 8 else 4))
-                depth_mst = 1 if M <= 2 else (2 if M <= 4 else (3 if M <= 6 else 4))
+                depth_mst = 1 if M <= 2 else (2 if M <= 4 else (3 if M <= 8 else 4))
                 dast_val = dast_old_val = mst_val = pt_val = None
                 sil = bic_gmm = bic_clr = da_km = da_gmm = da_clr = None
 
