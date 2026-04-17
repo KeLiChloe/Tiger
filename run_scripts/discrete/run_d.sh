@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ===== 参数配置 =====
-SAVE_DIR="exp_april_2026/discrete/varying_d_set9_oracle"
+SAVE_DIR="exp_april_2026/discrete/test_colab"
 mkdir -p "$SAVE_DIR"
 
 # ===== 实验循环 =====
 # varying d: same range as continuous counterpart
-for D in $(seq 1 1 20); do
+for D in $(seq 15 1 20); do
     D_TAG=$(printf "%02d" "$D")
 
     echo "🚀 Running experiment with d=${D} ..."
@@ -18,7 +18,6 @@ for D in $(seq 1 1 20); do
         --outcome_type discrete \
         --target_p_range 0.05 0.2 \
         --beta_range -0.1 0.1 \
-        --tau_range -0.5 0.8 \
         --delta_range -0.5 0.5 \
         --disturb_covariate_noise 3 \
         --DR_generation_method lightgbm \
@@ -35,7 +34,7 @@ for D in $(seq 1 1 20); do
         --disallowed_ball_radius 0.2 \
         --save_file "$OUTFILE" \
         --sequence_seed 999 \
-        --algorithms dast kmeans-standard gmm-standard clr-standard mst t_learner s_learner x_learner dr_learner causal_forest \
+        --algorithms dast mst kmeans-standard gmm-standard clr-standard t_learner s_learner x_learner dr_learner causal_forest
 
     echo "✅ Finished d=${D}. Saved to $OUTFILE"
     echo "----------------------------------------"

@@ -29,7 +29,6 @@ for CENTER in 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40; do
         --outcome_type discrete \
         --target_p_range "$P_LO" "$P_HI" \
         --beta_range -0.02 0.02 \
-        --tau_range -1 1 \
         --disturb_covariate_noise 3 \
         --DR_generation_method lightgbm \
         --kmeans_coef 0.3 \
