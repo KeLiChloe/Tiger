@@ -5,20 +5,17 @@ from rpy2.robjects import numpy2ri, default_converter
 from rpy2.robjects.packages import importr
 from rpy2.robjects.conversion import localconverter
 from ground_truth import PopulationSimulator, SegmentEstimate
-from utils import assign_trained_customers_to_segments, estimate_segment_parameters, plot_segment_sankey, evaluate_on_validation, compute_node_DR_value
-from IPython.display import SVG, display
+from utils import assign_trained_customers_to_segments, estimate_segment_parameters, evaluate_on_validation, compute_node_DR_value
 
 
 
 # Import R packages
 grf = importr('grf')
 policytree = importr('policytree')
-DiagrammeRsvg = importr('DiagrammeRsvg')
 grdevices = importr('grDevices')
 
 # Load R libraries
 ro.r('library(policytree)')
-ro.r('library(DiagrammeRsvg)')
 
 # Define R function to extract leaf-parent relationships
 ro.r('''
@@ -278,15 +275,6 @@ def post_prune_tree(Y, D, segment_labels, action_ids, Gamma_tr, target_leaf_num,
                 leaf_to_pruned_segment[leaf] = seg_id_map[seg_id]
 
     return pruned_segment_labels, pruned_action_ids, leaf_to_pruned_segment
-
-
-def plot_policy_tree(depth):
-    svg_filename=f'figures/policy_tree_depth_{depth}.svg'
-    svg_string = ro.r('DiagrammeRsvg::export_svg(plot(tree))')[0]
-    
-    with open(svg_filename, "w") as f:
-        f.write(svg_string)
-    display(SVG(filename=svg_filename))
     
 def assign_new_customers_to_pruned_tree(tree, pop, new_customers, leaf_to_pruned_segment, algo):
     """
