@@ -97,7 +97,6 @@ def plot_clustering_results(X_all, y_all, labels_pred):
 # set seed for reproducibility
 seed = np.random.randint(0, 10000)
 np.random.seed(7659)
-print("Random seed:", seed)
 
 
 # generate clusters randomly

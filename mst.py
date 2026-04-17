@@ -3,53 +3,50 @@
 import numpy as np
 from ground_truth import SegmentEstimate, PopulationSimulator
 from utils import estimate_segment_parameters, evaluate_on_validation, build_design_matrix
-from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.linear_model import LogisticRegression
 
 import random
 
 
+def _node_residual(Z_m, y_m, D_m, action_num, is_discrete):
+    """
+    Compute node impurity from pre-sliced arrays (no sklearn LinearRegression,
+    no design-matrix rebuild).  Called O(d × B) times per tree node.
 
-def compute_residual_value(X, Y, D, indices, include_interactions, action_num=None, is_discrete=False):
-    # Subset the data
-    X_m = X[indices]
-    D_m = D[indices].reshape(-1, 1)
-    Y_m = Y[indices].reshape(-1, 1)
-
-    # Strict check: all actions 0..action_num-1 must be present
+    Continuous : RSS via numpy least-squares  (much faster than sklearn OLS)
+    Discrete   : negative log-likelihood of logistic regression
+                 (max_iter=100 instead of 2000 – sufficient for split ranking)
+    """
+    # Strict check: every action must be present
     if action_num is not None:
-        unique_actions_in_data = np.unique(D_m)
         for a in range(action_num):
-            if a not in unique_actions_in_data:
+            if not np.any(D_m == a):
                 return np.inf
 
-    # Construct the design matrix: [intercept | X | D | (X*D)]
-    X_design = build_design_matrix(X_m, D_m, include_interactions)
-
     if is_discrete:
-        y_flat = Y_m.ravel().astype(int)
-
-        # Pure node: all labels identical → deviance ≈ 0 (perfect fit)
-        if len(np.unique(y_flat)) == 1:
+        y_int = y_m.astype(int)
+        if len(np.unique(y_int)) == 1:
             return 0.0
-
-        model = LogisticRegression(fit_intercept=False, solver='lbfgs', max_iter=2000)
+        model = LogisticRegression(
+            fit_intercept=False, solver='lbfgs',
+            max_iter=100, tol=1e-3, C=1e6,
+        )
         try:
-            model.fit(X_design, y_flat)
-            proba = model.predict_proba(X_design)
-            p_true = np.clip(proba[np.arange(len(y_flat)), y_flat], 1e-9, 1 - 1e-9)
-            return -np.sum(np.log(p_true))
+            model.fit(Z_m, y_int)
+            proba   = model.predict_proba(Z_m)
+            p_true  = np.clip(proba[np.arange(len(y_int)), y_int], 1e-9, 1 - 1e-9)
+            return  -np.sum(np.log(p_true))
         except Exception:
-            # Fallback: null-model deviance (intercept only)
-            p_mean = np.clip(np.mean(y_flat), 1e-9, 1 - 1e-9)
-            return -np.sum(y_flat * np.log(p_mean) + (1 - y_flat) * np.log(1 - p_mean))
-
+            p_mean = np.clip(np.mean(y_int), 1e-9, 1 - 1e-9)
+            return -np.sum(y_int * np.log(p_mean) + (1 - y_int) * np.log(1 - p_mean))
     else:
-        # Continuous: fit OLS, return residual sum of squares
-        y_flat = Y_m.ravel()
-        model = LinearRegression(fit_intercept=False)
-        model.fit(X_design, y_flat)
-        residuals = y_flat - model.predict(X_design)
-        return np.sum(residuals ** 2)
+        # Fast OLS RSS: numpy lstsq, no sklearn overhead
+        _, rss_arr, _, _ = np.linalg.lstsq(Z_m, y_m, rcond=None)
+        if len(rss_arr) > 0:
+            return float(rss_arr[0])
+        beta  = np.linalg.lstsq(Z_m, y_m, rcond=None)[0]
+        resid = y_m - Z_m @ beta
+        return float(np.dot(resid, resid))
 
 class MSTNode:
     def __init__(self, indices, depth=0):
@@ -70,27 +67,34 @@ class MSTNode:
         self.is_leaf = True
 
 class MSTree:
-    def __init__(self, x, y, D, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo, action_num, is_discrete=False):
-        self.x = x
-        self.y = y
-        self.D = D
-        self.H = candidate_thresholds
+    def __init__(self, x, y, D, Z, candidate_thresholds, min_leaf_size, epsilon, max_depth, algo, action_num, is_discrete=False):
+        self.x  = x
+        self.y  = y.ravel()          # keep as 1-D for fast indexing
+        self.D  = D.ravel().astype(int)
+        self.Z  = Z                  # precomputed design matrix (N, p)
+        self.H  = candidate_thresholds
         self.min_leaf_size = min_leaf_size
-        self.epsilon = epsilon
-        self.max_depth = max_depth
+        self.epsilon       = epsilon
+        self.max_depth     = max_depth
 
-        self.root = None
+        self.root       = None
         self.leaf_nodes = []
 
-        self.algo = algo
+        self.algo       = algo
         self.action_num = action_num
         self.is_discrete = is_discrete
 
+    def _eval(self, indices):
+        """Evaluate impurity for a node using pre-sliced Z / y / D."""
+        return _node_residual(
+            self.Z[indices], self.y[indices], self.D[indices],
+            self.action_num, self.is_discrete,
+        )
 
     def build(self, include_interactions):
         N = self.x.shape[0]
         all_indices = np.arange(N)
-        self.root = self._grow_node(all_indices, depth=0, include_interactions=include_interactions)
+        self.root = self._grow_node(all_indices, depth=0, init_value=None)
         
     
     def prune_to_segments_and_estimate(self, M, data, customers, include_interactions):
@@ -146,51 +150,60 @@ class MSTree:
             cust.est_segment[f"{self.algo}"] = segment_obj
 
 
-    def _grow_node(self, indices, depth, include_interactions):
+    def _grow_node(self, indices, depth, init_value=None):
         node = MSTNode(indices, depth)
-        node.value = compute_residual_value(self.x, self.y, self.D, indices, include_interactions, self.action_num, self.is_discrete)
+        # Reuse value computed by the parent during split search (avoid double work)
+        node.value = init_value if init_value is not None else self._eval(indices)
 
         if depth == self.max_depth:
             self.leaf_nodes.append(node)
             return node
-        best_gain = -np.inf
-        best_split = None
+
+        best_gain   = -np.inf
+        best_split  = None        # (j, t, left_idx, right_idx, lv, rv)
         valid_splits = []
 
+        x_node = self.x[indices]  # local view – avoids repeated fancy indexing
+
         for j in range(self.x.shape[1]):
+            xj = x_node[:, j]
             for t in self.H[j]:
-                left_idx = indices[self.x[indices, j] <= t]
-                right_idx = indices[self.x[indices, j] > t]
+                mask_l = xj <= t
+                mask_r = ~mask_l
+                left_idx  = indices[mask_l]
+                right_idx = indices[mask_r]
 
-                if self._check_leaf_constraints(left_idx) and self._check_leaf_constraints(right_idx):
-                    left_val = compute_residual_value(self.x, self.y, self.D, left_idx, include_interactions, self.action_num, self.is_discrete)
-                    right_val = compute_residual_value(self.x, self.y, self.D, right_idx, include_interactions, self.action_num, self.is_discrete)
-                    gain = node.value - (left_val + right_val)
-                    valid_splits.append((gain, j, t, left_idx, right_idx))
+                if not (self._check_leaf_constraints(left_idx) and
+                        self._check_leaf_constraints(right_idx)):
+                    continue
 
-                    if gain >= best_gain:
-                        best_gain = gain
-                        best_split = (j, t, left_idx, right_idx)
+                lv   = self._eval(left_idx)
+                rv   = self._eval(right_idx)
+                gain = node.value - (lv + rv)
+                valid_splits.append((gain, j, t, left_idx, right_idx, lv, rv))
 
-        # If no good split found, fallback to random valid split (if any)
+                if gain >= best_gain:
+                    best_gain  = gain
+                    best_split = (j, t, left_idx, right_idx, lv, rv)
+
         if best_split is None:
             if valid_splits:
-                _, j_rand, t_rand, left_idx, right_idx = random.choice(valid_splits)
+                _, j_r, t_r, left_idx, right_idx, lv, rv = random.choice(valid_splits)
                 node.is_leaf = False
-                node.split_feature = j_rand
-                node.split_threshold = t_rand
-                node.left = self._grow_node(left_idx, depth + 1, include_interactions)
-                node.right = self._grow_node(right_idx, depth + 1, include_interactions)
-                return node
+                node.split_feature   = j_r
+                node.split_threshold = t_r
+                node.left  = self._grow_node(left_idx,  depth + 1, init_value=lv)
+                node.right = self._grow_node(right_idx, depth + 1, init_value=rv)
             else:
                 self.leaf_nodes.append(node)
-                return node
+            return node
 
-        # Use best split
+        j, t, left_idx, right_idx, lv, rv = best_split
         node.is_leaf = False
-        node.split_feature, node.split_threshold, left_idx, right_idx = best_split
-        node.left = self._grow_node(left_idx, depth + 1, include_interactions)
-        node.right = self._grow_node(right_idx, depth + 1, include_interactions)
+        node.split_feature   = j
+        node.split_threshold = t
+        node.left  = self._grow_node(left_idx,  depth + 1, init_value=lv)
+        node.right = self._grow_node(right_idx, depth + 1, init_value=rv)
         return node
 
     
@@ -265,40 +278,34 @@ class MSTree:
 
 
 
-def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, min_leaf_size, epsilon,  algo, include_interactions, threshold_grid=None):
+def MST_segment_and_estimate(pop: PopulationSimulator, n_segments, max_depth, min_leaf_size, epsilon, algo, include_interactions, threshold_grid=None):
     # Prepare training data
-    data_train = {
-        "X": np.array([cust.x for cust in pop.train_customers]),
-        "D": np.array([cust.D_i for cust in pop.train_customers]).reshape(-1, 1),
-        "Y": np.array([cust.y for cust in pop.train_customers]).reshape(-1, 1),
-    }
-    
-    
-    # Generate candidate thresholds using quantile-based binning
-    # Use B bins to reduce computational cost
-    B = 50  # Use threshold_grid as number of bins
+    X = np.array([cust.x   for cust in pop.train_customers])
+    D = np.array([cust.D_i for cust in pop.train_customers])
+    Y = np.array([cust.y   for cust in pop.train_customers])
+    data_train = {"X": X, "D": D.reshape(-1, 1), "Y": Y.reshape(-1, 1)}
+
+    # Precompute design matrix ONCE — reused for every candidate split
+    Z = build_design_matrix(X, D, include_interactions)
+
+    # Generate candidate thresholds using quantile-based binning (B bins)
+    B = 50
     H = {}
-    for j in range(data_train["X"].shape[1]):
-        sorted_values = np.sort(np.unique(data_train["X"][:, j]))
+    for j in range(X.shape[1]):
+        sorted_values = np.sort(np.unique(X[:, j]))
         N_unique = len(sorted_values)
-        
         if N_unique <= B:
-            # Few unique values, use them directly as thresholds
             H[j] = sorted_values
         else:
-            # Many unique values, use quantile-based binning
-            # Define indices for k/B quantiles: l_k = floor(k/B * N_unique)
-            quantile_indices = [int(np.floor(k / B * N_unique)) for k in range(1, B)]
-            # Remove duplicates and ensure valid indices
-            quantile_indices = sorted(set([min(idx, N_unique - 1) for idx in quantile_indices]))
-            # Get threshold values at these quantiles
+            quantile_indices = sorted(set(
+                min(int(np.floor(k / B * N_unique)), N_unique - 1)
+                for k in range(1, B)
+            ))
             H[j] = sorted_values[quantile_indices]
-    
-    # Build MST
+
+    # Build MST (Z is passed in; no design matrix is rebuilt inside the tree)
     tree = MSTree(
-        x=data_train["X"],
-        y=data_train["Y"],
-        D=data_train["D"],
+        x=X, y=Y, D=D, Z=Z,
         candidate_thresholds=H,
         min_leaf_size=min_leaf_size,
         epsilon=epsilon,

@@ -6,7 +6,7 @@ mkdir -p "$SAVE_DIR"
 
 # ===== 实验循环 =====
 # varying d: same range as continuous counterpart
-for D in $(seq 15 1 20); do
+for D in $(seq 1 1 20); do
     D_TAG=$(printf "%02d" "$D")
 
     echo "🚀 Running experiment with d=${D} ..."

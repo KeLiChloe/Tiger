@@ -305,6 +305,10 @@ def parse_args():
 
     parser.add_argument("--N_sims", type=int, help="Number of simulations to run")
     
+    parser.add_argument("--n_workers", type=int, default=None,
+                        help="Number of parallel worker processes (default: all CPU cores). "
+                             "Set to 1 to disable parallelism.")
+
     parser.add_argument("--save_file", type=str, help="Path to save experiment results")
     
     parser.add_argument("--sequence_seed", type=int, help="Random seed for simulation sequence")
